@@ -287,23 +287,123 @@ def analyst_ratings(s): return bundle(s).get("analyst", {})
 def stats(s): return bundle(s).get("stats", {})
 
 
-def quarterly(s):
-    """Recent quarterly revenue & net income in ₹ crore (live-only, best-effort)."""
+_FX: dict = {}
+
+
+def _usd_to_inr() -> float:
+    """USD→INR rate (cached 1h). Falls back to a recent constant if the FX feed fails."""
+    now = time.time()
+    if "rate" in _FX and now - _FX["t"] < 3600:
+        return _FX["rate"]
+    rate = None
     try:
         import yfinance as yf
-        q = yf.Ticker(_nse(s)).quarterly_income_stmt
+        try:
+            from curl_cffi import requests as _creq
+            fx = yf.Ticker("INR=X", session=_creq.Session(impersonate="chrome"))
+        except Exception:
+            fx = yf.Ticker("INR=X")
+        try:
+            rate = float(fx.fast_info.last_price)
+        except Exception:
+            h = fx.history(period="5d").dropna(subset=["Close"])
+            if not h.empty:
+                rate = float(h["Close"].iloc[-1])
+    except Exception:
+        pass
+    rate = rate if (rate and rate == rate and rate > 1) else 86.0
+    _FX["rate"], _FX["t"] = rate, now
+    return rate
+
+
+def _inr_scale(tk, sample) -> float:
+    """Multiplier to convert a raw income/balance-sheet value to INR.
+
+    yfinance reports some US-cross-listed Indian names (e.g. INFY) in USD. The
+    `financialCurrency` flag alone is unreliable (HCLTECH is wrongly tagged USD),
+    so we only convert when BOTH the flag says USD AND the magnitude looks like USD
+    (genuine USD figures are ~80x smaller than the INR equivalent). Large values
+    (>= ₹5,000cr-ish raw) are treated as INR without even fetching `.info`."""
+    try:
+        if sample is None or abs(float(sample)) >= 5e10:
+            return 1.0          # clearly INR magnitude — skip the heavy .info call
+    except Exception:
+        return 1.0
+    try:
+        if (tk.info or {}).get("financialCurrency") == "USD":
+            return _usd_to_inr()
+    except Exception:
+        pass
+    return 1.0
+
+
+def quarterly(s):
+    """Recent quarterly revenue, net profit, operating income (₹ crore) and EPS
+    (live-only, best-effort). Values are normalised to INR so peer comparisons are
+    apples-to-apples even when yfinance reports a peer in USD."""
+    try:
+        tk = _ticker(s)
+        q = tk.quarterly_income_stmt
         if q is None or q.empty:
             return []
+        def at(row, col):
+            return q.at[row, col] if row in q.index else None
+        scale = _inr_scale(tk, at("Total Revenue", q.columns[0]))
+        cr = lambda v: round(float(v) * scale / 1e7) if v is not None and v == v else None
+        num = lambda v: round(float(v) * scale, 2) if v is not None and v == v else None
         out = []
         for col in list(q.columns)[:4]:
-            rev = q.at["Total Revenue", col] if "Total Revenue" in q.index else None
-            ni = q.at["Net Income", col] if "Net Income" in q.index else None
-            cr = lambda v: round(float(v) / 1e7) if v is not None and v == v else None
             out.append({"quarter": str(getattr(col, "date", lambda: col)()),
-                        "revenue_cr": cr(rev), "net_income_cr": cr(ni)})
+                        "revenue_cr": cr(at("Total Revenue", col)),
+                        "net_income_cr": cr(at("Net Income", col)),
+                        "operating_income_cr": cr(at("Operating Income", col)),
+                        "eps": num(at("Basic EPS", col))})
         return out
     except Exception:
         return []
+
+
+def balance_sheet(s):
+    """Key balance-sheet items in ₹ crore: shareholders' equity, total assets &
+    liabilities, debt, cash, retained earnings, working capital, plus book value
+    per share (live-only, best-effort)."""
+    try:
+        tk = _ticker(s)
+        bs = tk.quarterly_balance_sheet
+        if bs is None or bs.empty:
+            bs = tk.balance_sheet
+        if bs is None or bs.empty:
+            return {}
+        col = bs.columns[0]
+        raw_assets = bs.at["Total Assets", col] if "Total Assets" in bs.index else None
+        scale = _inr_scale(tk, raw_assets)        # normalise USD-reported names to INR
+        def cr(*rows):
+            for r in rows:
+                if r in bs.index:
+                    v = bs.at[r, col]
+                    if v is not None and v == v:
+                        return round(float(v) * scale / 1e7)
+            return None
+        out = {
+            "as_of": str(getattr(col, "date", lambda: col)()),
+            "shareholders_equity_cr": cr("Stockholders Equity", "Common Stock Equity"),
+            "total_assets_cr": cr("Total Assets"),
+            "total_liabilities_cr": cr("Total Liabilities Net Minority Interest"),
+            "total_debt_cr": cr("Total Debt"),
+            "cash_cr": cr("Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"),
+            "retained_earnings_cr": cr("Retained Earnings"),
+            "working_capital_cr": cr("Working Capital"),
+        }
+        try:
+            # NOTE: info.bookValue is in the PRICE currency (INR for NSE), not the
+            # statement currency, so it must NOT be scaled by `scale`.
+            bv = (tk.info or {}).get("bookValue")
+            out["book_value_per_share"] = round(float(bv), 2) if bv is not None else None
+        except Exception:
+            pass
+        return {k: v for k, v in out.items() if v is not None}
+    except Exception:
+        return {}
 
 
 def performance(s):

@@ -47,7 +47,8 @@ TOOLS = {
     "fundamentals": "Pull raw valuation / financial-health metrics",
     "valuation": "A compact valuation snapshot (PE, PB, market cap, yield)",
     "fundamental_analysis": "Interpret the fundamentals: strengths, weaknesses, quality verdict",
-    "quarterly_results": "Recent quarterly revenue & net profit (financial results)",
+    "quarterly_results": "Recent quarterly revenue, net profit, operating income & EPS",
+    "balance_sheet": "Balance sheet: shareholders' equity, assets, liabilities, debt, cash",
     "key_stats": "Extended stats: beta, 50/200-day averages, growth, margins",
     "dividends": "Review the dividend history",
     "dividend_analysis": "Assess dividend quality: yield, growth, consistency",
@@ -253,6 +254,12 @@ def _execute(tool: str, ticker: str):
             if not q:
                 return "Quarterly results aren't available for this stock (live-only data).", None
             return "Recent quarters (₹ crore): " + json.dumps(q, default=str), None
+
+        if tool == "balance_sheet":
+            bs = market.balance_sheet(ticker)
+            if not bs:
+                return "Balance-sheet data isn't available for this stock (live-only data).", None
+            return "Balance sheet (₹ crore): " + json.dumps(bs, default=str), None
 
         if tool == "key_stats":
             s = market.stats(ticker)

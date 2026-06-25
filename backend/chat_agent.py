@@ -12,6 +12,7 @@ Guardrails to keep answers good:
 
 import json
 import os
+import re
 
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
@@ -244,20 +245,86 @@ def get_key_stats(ticker: str) -> str:
     return json.dumps(s, default=str) if s else "Extended stats aren't available for this stock (live-only)."
 
 
+@tool
+def get_balance_sheet(ticker: str) -> str:
+    """Balance-sheet snapshot for an NSE stock: shareholders' (stockholders') equity,
+    total assets, total liabilities, total debt, cash, retained earnings, working
+    capital (all ₹ crore) and book value per share. Use for 'shareholders equity',
+    'balance sheet', 'net worth', 'assets vs liabilities', 'how much debt/cash'."""
+    bs = market.balance_sheet(ticker)
+    return json.dumps(bs, default=str) if bs else "Balance-sheet data isn't available for this stock (live-only)."
+
+
+@tool
+def get_competitors(ticker: str) -> str:
+    """Identify the main NSE-listed competitors / peers of a company and their tickers.
+    Use this FIRST for 'competitors of X', 'peers', 'rivals', 'vs its competition',
+    then feed the returned tickers into compare_quarterly or other per-stock tools."""
+    name = ticker
+    try:
+        name = market.bundle(ticker).get("name", ticker)
+    except Exception:
+        pass
+    raw = _llm.invoke([HumanMessage(content=(
+        f"List the 3-4 closest publicly listed competitors of {name} ({ticker}) on the "
+        "Indian NSE. Reply ONLY as compact JSON: "
+        '{"peers":[{"ticker":"<NSE symbol, no .NS suffix>","name":"<company>"}]} '
+        "Use real NSE ticker symbols. Exclude the company itself."
+    ))]).content
+    try:
+        obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+        peers = [p for p in obj.get("peers", []) if p.get("ticker")][:4]
+        return json.dumps({"company": {"ticker": ticker.upper(), "name": name}, "peers": peers}, default=str)
+    except Exception:
+        return raw
+
+
+@tool
+def compare_quarterly(tickers: str) -> str:
+    """Compare recent QUARTERLY results across MULTIPLE companies. Pass a comma- or
+    space-separated list of NSE tickers (e.g. 'TCS, INFY, WIPRO, HCLTECH'). Returns
+    each company's last two quarters — revenue, net profit, operating income (₹ crore)
+    and EPS — for a side-by-side comparison of peers/competitors."""
+    syms = [t.strip().upper() for t in re.split(r"[,\s]+", tickers) if t.strip()]
+    syms = list(dict.fromkeys(syms))[:6]            # dedupe + cap
+    out = {}
+    for sym in syms:
+        try:
+            q = market.quarterly(sym)
+            out[sym] = q[:2] if q else "quarterly results not available (live-only)"
+        except Exception as e:
+            out[sym] = f"error: {e}"
+    return json.dumps(out, default=str)
+
+
 TOOLS = [get_quote, get_price_chart, get_fundamentals, get_valuation, get_fundamental_analysis,
          get_technical_analysis, explain_price_move, get_risk_assessment, get_bull_bear_case,
          analyze_news_sentiment, get_news_headlines, get_splits, get_dividends, get_52week_range,
          get_performance, get_analyst_ratings, get_quarterly_results, get_key_stats,
+         get_balance_sheet, get_competitors, compare_quarterly,
          ask_document, deep_desk_analysis]
 
 SYSTEM = SystemMessage(content=(
-    "You are a careful equity research assistant for Indian (NSE) stocks. "
-    "RULES: Only state facts returned by a tool; never invent prices, numbers, "
-    "dates or news. Call each tool AT MOST ONCE per question; if a tool returns "
-    "no data or an error, do NOT call it again, just tell the user and finish. "
-    "Pick the few tools that actually answer the question; don't call everything. "
-    "Charts render automatically, so just comment on the trend. Be concise. Add "
-    "'Informational only, not investment advice.' only when giving a recommendation."
+    "You are a helpful, knowledgeable FINANCIAL assistant. You can:\n"
+    "1) Answer general finance & investing questions (concepts, ratios, instruments, "
+    "markets, macro, taxes) directly from your own knowledge.\n"
+    "2) Analyse specific Indian (NSE) stocks using your tools.\n"
+    "3) Answer questions about a document the user uploaded (use ask_document).\n"
+    "4) Discuss and interpret news and sentiment.\n\n"
+    "GROUNDING RULES:\n"
+    "- For SPECIFIC numbers about a stock (price, fundamentals, balance sheet / "
+    "shareholders' equity, quarterly results, etc.), get them from a tool — never "
+    "invent prices, figures, dates or news. For general financial knowledge, answer "
+    "directly without tools.\n"
+    "- You MAY call a tool multiple times with DIFFERENT tickers (e.g. to compare "
+    "competitors) — that is encouraged. Just don't call the SAME tool with the SAME "
+    "ticker twice. If a tool returns no data, say so and move on; don't retry it.\n"
+    "- For 'competitors/peers/rivals of X', call get_competitors FIRST, then "
+    "compare_quarterly (or other per-stock tools) on the returned tickers.\n"
+    "- NSE money is in Indian Rupees (₹); don't use '$' for NSE stocks.\n"
+    "- Charts render automatically — comment on the trend, don't list every point.\n"
+    "Be concise and specific. Add 'Informational only, not investment advice.' only "
+    "when you give an explicit buy / sell / hold recommendation."
 ))
 
 AGENT = create_react_agent(_llm, TOOLS, prompt=SYSTEM)
@@ -274,12 +341,15 @@ async def run_chat(ticker: str, question: str, thread_id: str):
     if docstore.has_document(thread_id):
         doc_note = (f"\n[A document is attached to this chat: '{docstore.doc_name(thread_id)}'. "
                     "If the question is about its contents, use the ask_document tool.]")
-    user_msg = HumanMessage(content=f"[Stock in focus: {ticker.upper()} (NSE)]{doc_note}\n{question}")
+    user_msg = HumanMessage(content=(
+        f"[Currently selected NSE stock: {ticker.upper()} — use it when the user says "
+        f"'this stock' / 'it', but ignore it for general or multi-company questions.]"
+        f"{doc_note}\n{question}"))
     messages = history + [user_msg]
     final_answer = ""
     try:
         async for update in AGENT.astream({"messages": messages},
-                                          config={"recursion_limit": 20}, stream_mode="updates"):
+                                          config={"recursion_limit": 30}, stream_mode="updates"):
             for node, payload in update.items():
                 for msg in payload.get("messages", []):
                     if isinstance(msg, AIMessage):

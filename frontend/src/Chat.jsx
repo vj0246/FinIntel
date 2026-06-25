@@ -3,7 +3,7 @@ import Chart from "./Chart.jsx";
 import TickerSearch from "./TickerSearch.jsx";
 import { API } from "./api.js";
 
-const SUGGEST = ["Do a fundamental analysis", "Why did it fall recently?", "Technical view & chart", "Bull vs bear case", "Buy, hold or sell?"];
+const SUGGEST = ["Compare this stock's quarterly results with its top competitors", "Show the balance sheet & shareholders' equity", "Why did it move recently? (with chart)", "Explain P/E vs P/B in simple terms", "Buy, hold or sell?"];
 const DOC_SUGGEST = ["Summarise the uploaded document", "What's the net profit & revenue?", "Key risks mentioned in the document"];
 
 const TOOL_LABEL = {
@@ -15,6 +15,8 @@ const TOOL_LABEL = {
   get_splits: "Stock splits", get_dividends: "Dividends", get_52week_range: "52-week range",
   get_performance: "Performance", get_analyst_ratings: "Analyst ratings",
   get_quarterly_results: "Quarterly results", get_key_stats: "Key stats",
+  get_balance_sheet: "Balance sheet", get_competitors: "Competitors",
+  compare_quarterly: "Compare quarters",
   ask_document: "Document Q&A", deep_desk_analysis: "Desk analysis",
 };
 
@@ -99,10 +101,10 @@ export default function Chat() {
     <div className="chat">
       <div className="chat-top">
         <div className="chat-title-row">
-          <div className="chat-title">Ask about a stock</div>
+          <div className="chat-title">Financial assistant</div>
           <button className="chat-refresh" onClick={reset} disabled={busy} title="Clear chat & start fresh" aria-label="Clear chat">↻ New</button>
         </div>
-        <div className="chat-sub">Free-form Q&amp;A — it answers instantly and picks its own tools, no step-by-step approvals. (The Analyst on the left works one approved step at a time.)</div>
+        <div className="chat-sub">Ask about NSE stocks, compare competitors, query an uploaded document, or any general finance question. It picks its own tools and answers instantly — no step-by-step approvals.</div>
         <div className="chat-ticker-row">
           <span className="nse">NSE</span>
           <TickerSearch value={ticker} onChange={setTicker} placeholder="Search company or symbol" />
@@ -124,7 +126,7 @@ export default function Chat() {
       <div className="chat-body">
         {msgs.length === 0 && (
           <div className="chat-empty">
-            <p>{doc ? "Ask about the stock or your attached document." : "Pick a stock, ask anything. Or attach a PDF / Word doc above and ask about it."}</p>
+            <p>{doc ? "Ask about the stock or your attached document." : "Ask about a stock, compare competitors, attach a PDF/Word doc, or ask any finance question."}</p>
             <div className="suggest">
               {(doc ? DOC_SUGGEST : SUGGEST).map((s) => <button key={s} onClick={() => ask(s)}>{s}</button>)}
             </div>

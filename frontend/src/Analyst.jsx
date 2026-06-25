@@ -18,6 +18,7 @@ const TOOL_LABEL = {
   quote: "Quote", fifty_two_week: "52-week range", performance: "Performance",
   price_trend: "Price trend", fundamentals: "Fundamentals", valuation: "Valuation",
   fundamental_analysis: "Fundamental analysis", quarterly_results: "Quarterly results",
+  balance_sheet: "Balance sheet",
   key_stats: "Key stats", dividends: "Dividends", dividend_analysis: "Dividend analysis",
   stock_splits: "Stock splits", technical_analysis: "Technical analysis",
   explain_move: "Reason for the move", news_sentiment: "News sentiment",
