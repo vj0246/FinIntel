@@ -9,6 +9,7 @@ the UI shows as a badge, so sample data is never mistaken for live.
 
 import time
 from seed_data import SEEDS
+import nse
 
 _CACHE: dict = {}
 _TTL = 300
@@ -154,6 +155,11 @@ def _live_bundle(symbol: str) -> dict:
     except Exception:
         pass
 
+    # NSE India = authoritative Indian fundamentals (P/E, sector P/E, market cap,
+    # 52-week range). Best-effort: works from an Indian IP, blocked on many cloud
+    # hosts, so it returns {} there and we fall back to the derived numbers below.
+    nse_d = nse.symbol_data(symbol)
+
     # .info is SUPPLEMENTARY only — it is often empty/throttled for NSE names, which
     # was the bug behind "Valuation: {}". We never depend on it for core ratios.
     info = {}
@@ -177,13 +183,13 @@ def _live_bundle(symbol: str) -> dict:
     equity_cr = bsheet.get("shareholders_equity_cr")
     debt_cr = bsheet.get("total_debt_cr")
 
-    mc = fi_mktcap or _num(info.get("marketCap")) or (fi_shares * price if fi_shares else None)
-    mc_cr = round(mc / 1e7) if mc else None
+    mc = nse_d.get("market_cap") or fi_mktcap or _num(info.get("marketCap")) or (fi_shares * price if fi_shares else None)
+    mc_cr = nse_d.get("market_cap_cr") or (round(mc / 1e7) if mc else None)
 
-    # Derive ratios from primary data (market cap, trailing profit, equity); fall back
-    # to .info only when a component is missing.
-    pe = (round(mc_cr / ttm_ni_cr, 2) if (mc_cr and ttm_ni_cr and ttm_ni_cr > 0)
-          else _num(info.get("trailingPE")))
+    # P/E: prefer NSE's authoritative figure; else compute from market cap ÷ trailing
+    # profit; else fall back to .info.
+    pe = nse_d.get("pe") or (round(mc_cr / ttm_ni_cr, 2) if (mc_cr and ttm_ni_cr and ttm_ni_cr > 0)
+                             else _num(info.get("trailingPE")))
     pb = (round(mc_cr / equity_cr, 2) if (mc_cr and equity_cr and equity_cr > 0)
           else _num(info.get("priceToBook")))
     roe = (round(ttm_ni_cr / equity_cr * 100, 2) if (ttm_ni_cr and equity_cr and equity_cr > 0)
@@ -198,10 +204,12 @@ def _live_bundle(symbol: str) -> dict:
         d2e = None
     eps_ttm = round(ttm_ni_cr * 1e7 / fi_shares, 2) if (ttm_ni_cr and fi_shares) else None
 
-    fundamentals = {"pe": pe, "pb": pb, "market_cap": mc, "market_cap_cr": mc_cr,
+    fundamentals = {"pe": pe, "pb": pb, "sector_pe": nse_d.get("sector_pe"),
+                    "market_cap": mc, "market_cap_cr": mc_cr,
                     "net_margin_pct": net_margin, "roe_pct": roe,
                     "dividend_yield_pct": None, "debt_to_equity": d2e,
-                    "eps_ttm": eps_ttm, "revenue_ttm_cr": ttm_rev_cr}
+                    "eps_ttm": eps_ttm, "revenue_ttm_cr": ttm_rev_cr,
+                    "sector": nse_d.get("sector"), "industry": nse_d.get("industry")}
 
     # Splits & dividends
     splits, dividends, dvs = [], [], None
@@ -243,7 +251,9 @@ def _live_bundle(symbol: str) -> dict:
              "revenue_growth_pct": rg if rg is not None else _pct(info.get("revenueGrowth")),
              "earnings_growth_pct": eg if eg is not None else _pct(info.get("earningsGrowth")),
              "operating_margin_pct": op_margin, "gross_margin_pct": _pct(info.get("grossMargins")),
-             "current_ratio": info.get("currentRatio")}
+             "current_ratio": info.get("currentRatio"),
+             "annual_volatility_pct": nse_d.get("annual_volatility_pct"),
+             "delivery_pct": nse_d.get("delivery_pct")}
     stats = {k: v for k, v in stats.items() if v is not None}
 
     analyst = {"target_mean": info.get("targetMeanPrice"), "target_high": info.get("targetHighPrice"),
@@ -266,7 +276,8 @@ def _live_bundle(symbol: str) -> dict:
         "price": {"period": "6mo", "start": closes[0], "end": price,
                   "high": max(closes), "low": min(closes), "change_pct": change,
                   "avg_volume_m": avg_volume_m},
-        "week52": {"high": info.get("fiftyTwoWeekHigh"), "low": info.get("fiftyTwoWeekLow")},
+        "week52": {"high": nse_d.get("year_high") or info.get("fiftyTwoWeekHigh"),
+                   "low": nse_d.get("year_low") or info.get("fiftyTwoWeekLow")},
         "fundamentals": fundamentals, "news": news,
         "splits": splits, "dividends": dividends, "chart": chart,
         "analyst": analyst, "stats": stats,
@@ -546,7 +557,8 @@ def performance(s):
 
 def valuation(s):
     f = bundle(s)["fundamentals"]
-    return {k: f.get(k) for k in ("pe", "pb", "market_cap", "market_cap_cr", "dividend_yield_pct") if f.get(k) is not None}
+    return {k: f.get(k) for k in ("pe", "sector_pe", "pb", "market_cap_cr", "dividend_yield_pct")
+            if f.get(k) is not None}
 
 
 def list_supported():
