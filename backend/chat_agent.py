@@ -323,8 +323,10 @@ SYSTEM = SystemMessage(content=(
     "compare_quarterly (or other per-stock tools) on the returned tickers.\n"
     "- NSE money is in Indian Rupees (₹); don't use '$' for NSE stocks.\n"
     "- Charts render automatically — comment on the trend, don't list every point.\n"
-    "Be concise and specific. Add 'Informational only, not investment advice.' only "
-    "when you give an explicit buy / sell / hold recommendation."
+    "ANSWER STYLE: Be as SHORT as possible while technically precise. Lead with the "
+    "number / verdict. Prefer 1-3 sentences or a small table; use figures, not prose. "
+    "No preamble, no filler, no hedging. Do NOT add disclaimers such as 'informational "
+    "only' or 'not investment advice'."
 ))
 
 AGENT = create_react_agent(_llm, TOOLS, prompt=SYSTEM)

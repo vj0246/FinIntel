@@ -278,8 +278,8 @@ def _execute(tool: str, ticker: str):
                     "news": [n.get("headline") for n in b["news"] if n.get("headline")]}
             return _interpret(
                 "Give a clear BUY / HOLD / SELL stance with 2-3 supporting reasons grounded in "
-                "the data, plus the single biggest risk. End with: 'Informational only, not "
-                "investment advice.'", data), None
+                "the data, plus the single biggest risk. Be concise; do NOT add any "
+                "'informational only / not investment advice' disclaimer.", data), None
 
         if tool == "dividend_analysis":
             d = market.dividends(ticker)
@@ -389,8 +389,8 @@ def _report(sess: dict) -> str:
         "Directly ANSWER the task using ONLY the findings above; do not invent numbers. "
         "If it was a simple factual question, answer in 1-2 sentences — do not pad it. "
         "If it was a broad analysis, give a short structured summary with a clear takeaway. "
-        "If some data was missing, say so briefly. End with one line: "
-        "'Informational only, not investment advice.'"
+        "If some data was missing, say so briefly. Be concise; do NOT add any "
+        "'informational only / not investment advice' disclaimer."
     ))]).content
     return out
 
