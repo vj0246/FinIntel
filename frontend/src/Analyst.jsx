@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import Chart from "./Chart.jsx";
 import TickerSearch from "./TickerSearch.jsx";
+import Markdown from "./Markdown.jsx";
 import { API } from "./api.js";
 
 const PRESETS = [
@@ -81,7 +82,7 @@ export default function Analyst() {
       <div className="task-setup">
         <div className="row1">
           <span className="nse">NSE</span>
-          <TickerSearch value={ticker} onChange={setTicker} disabled={running} placeholder="Search company or symbol, e.g. RELIANCE" />
+          <TickerSearch value={ticker} onChange={setTicker} disabled={running} placeholder="Search a company or NSE symbol (e.g. TCS)" />
         </div>
         <div className="presets">
           {PRESETS.map(([label, t]) => (
@@ -103,11 +104,11 @@ export default function Analyst() {
           it.kind === "intro" ? (
             <div key={i} className="event"><span className="node plan" /><div className="plan-text">{it.text}</div></div>
           ) : it.kind === "step" ? (
-            <div key={i} className="event" style={{ "--c": "var(--think)" }}><span className="node role" /><div className="label" style={{ color: "var(--think)" }}>{TOOL_LABEL[it.tool] || it.tool}</div><div className="plan-text" style={{ whiteSpace: "pre-wrap", fontStyle: "normal" }}>{it.text}</div></div>
+            <div key={i} className="event" style={{ "--c": "var(--think)" }}><span className="node role" /><div className="label" style={{ color: "var(--think)" }}>{TOOL_LABEL[it.tool] || it.tool}</div><div className="plan-text" style={{ fontStyle: "normal" }}><Markdown>{it.text}</Markdown></div></div>
           ) : it.kind === "chart" ? (
             <div key={i} className="event"><span className="node role" style={{ "--c": "var(--signal)" }} /><Chart series={it.series} ticker={it.ticker} changePct={it.changePct} /></div>
           ) : it.kind === "final" ? (
-            <div key={i} className="event"><span className="node final" /><div className="label">final report</div><div className="verdict"><div className="thesis" style={{ whiteSpace: "pre-wrap" }}>{it.text}</div></div></div>
+            <div key={i} className="event"><span className="node final" /><div className="label">final report</div><div className="verdict"><div className="thesis"><Markdown>{it.text}</Markdown></div></div></div>
           ) : (
             <div key={i} className="event"><span className="node plan" /><div className="err">⚠ {it.text}</div></div>
           )

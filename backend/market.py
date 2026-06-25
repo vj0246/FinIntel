@@ -123,7 +123,7 @@ def _live_bundle(symbol: str) -> dict:
     except Exception:
         pass
 
-    splits, dividends = [], []
+    splits, dividends, dvs = [], [], None
     try:
         splits = [{"date": str(i.date()), "ratio": float(r)} for i, r in tk.splits.items()][-8:]
     except Exception:
@@ -131,6 +131,25 @@ def _live_bundle(symbol: str) -> dict:
     try:
         dvs = tk.dividends
         dividends = [{"year": i.year, "amount": round(float(v), 2)} for i, v in dvs.items()][-6:]
+    except Exception:
+        pass
+
+    # Yahoo's derived ratios for NSE names are often stale/inconsistent, so derive
+    # PE and dividend yield from primary data instead — price ÷ trailing EPS, and
+    # the actual trailing-12-month dividends ÷ price. This also keeps them consistent
+    # with the price and quarterly EPS we display (PE = price / EPS the user can see).
+    price = closes[-1]
+    ttm_eps = _ttm_eps(tk)
+    if ttm_eps and ttm_eps > 0:
+        fundamentals["pe"] = round(price / ttm_eps, 2)
+        fundamentals["eps_ttm"] = round(ttm_eps, 2)
+    try:
+        import pandas as pd
+        if dvs is not None and not dvs.empty:
+            now = pd.Timestamp.now(tz=dvs.index.tz)
+            ttm_div = float(dvs[dvs.index >= now - pd.Timedelta(days=365)].sum())
+            if ttm_div > 0:
+                fundamentals["dividend_yield_pct"] = round(ttm_div / price * 100, 2)
     except Exception:
         pass
 
@@ -335,6 +354,25 @@ def _inr_scale(tk, sample) -> float:
     except Exception:
         pass
     return 1.0
+
+
+def _ttm_eps(tk):
+    """Trailing-12-month Basic EPS from the last 4 quarters (INR-normalised). Returns
+    None unless a full year of quarters is available, so PE never uses a partial TTM."""
+    try:
+        q = tk.quarterly_income_stmt
+        if q is None or q.empty or "Basic EPS" not in q.index:
+            return None
+        rev0 = q.at["Total Revenue", q.columns[0]] if "Total Revenue" in q.index else None
+        scale = _inr_scale(tk, rev0)
+        vals = []
+        for c in list(q.columns)[:4]:
+            v = q.at["Basic EPS", c]
+            if v is not None and v == v:
+                vals.append(float(v) * scale)
+        return sum(vals) if len(vals) >= 4 else None
+    except Exception:
+        return None
 
 
 def quarterly(s):

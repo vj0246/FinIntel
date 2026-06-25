@@ -4,7 +4,7 @@ import Chat from "./Chat.jsx";
 
 export default function App() {
   // shared ticker: the side chat follows the analyst unless changed independently
-  const [ticker, setTicker] = useState("RELIANCE");
+  const [ticker, setTicker] = useState("");
 
   return (
     <div className="shell">

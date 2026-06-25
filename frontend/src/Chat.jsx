@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import Chart from "./Chart.jsx";
 import TickerSearch from "./TickerSearch.jsx";
+import Markdown from "./Markdown.jsx";
 import { API } from "./api.js";
 
 const SUGGEST = ["Compare this stock's quarterly results with its top competitors", "Show the balance sheet & shareholders' equity", "Why did it move recently? (with chart)", "Explain P/E vs P/B in simple terms", "Buy, hold or sell?"];
@@ -21,7 +22,7 @@ const TOOL_LABEL = {
 };
 
 export default function Chat() {
-  const [ticker, setTicker] = useState("RELIANCE");
+  const [ticker, setTicker] = useState("");
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -143,7 +144,7 @@ export default function Chat() {
                 </div>
               )}
               {m.chart && <Chart series={m.chart.series} ticker={m.chart.ticker} changePct={m.chart.changePct} />}
-              {m.answer && <div className="bot-text">{m.answer}</div>}
+              {m.answer && <Markdown>{m.answer}</Markdown>}
               {m.loading && !m.answer && <div className="dots"><i /><i /><i /></div>}
             </div>
           )
@@ -156,7 +157,7 @@ export default function Chat() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && ask()}
-          placeholder={`Ask about ${ticker}…`}
+          placeholder={ticker ? `Ask about ${ticker}…` : "Ask about a stock or anything financial…"}
           disabled={busy}
         />
         <button onClick={() => ask()} disabled={busy || !input.trim()}>Send</button>
