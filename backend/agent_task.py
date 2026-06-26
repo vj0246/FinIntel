@@ -151,7 +151,7 @@ _LABELS = {
     "pe": "P/E", "pb": "P/B", "sector_pe": "Sector P/E", "sector": "Sector",
     "industry": "Industry", "annual_volatility_pct": "Annual volatility",
     "delivery_pct": "Delivery %", "market_cap_cr": "Market cap", "market_cap": "Market cap (₹)",
-    "roe_pct": "ROE", "net_margin_pct": "Net margin", "operating_margin_pct": "Operating margin",
+    "roe_pct": "ROE", "roce_pct": "ROCE", "net_margin_pct": "Net margin", "operating_margin_pct": "Operating margin",
     "gross_margin_pct": "Gross margin", "debt_to_equity": "Debt / equity",
     "dividend_yield_pct": "Dividend yield", "eps_ttm": "EPS (TTM)", "revenue_ttm_cr": "Revenue (TTM)",
     "shareholders_equity_cr": "Shareholders' equity", "total_assets_cr": "Total assets",

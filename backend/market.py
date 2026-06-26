@@ -10,6 +10,7 @@ the UI shows as a badge, so sample data is never mistaken for live.
 import time
 from seed_data import SEEDS
 import nse
+import screener
 
 _CACHE: dict = {}
 _TTL = 300
@@ -191,9 +192,17 @@ def _live_bundle(symbol: str) -> dict:
             break
         time.sleep(0.4 * (attempt + 1))
 
-    # NSE India = authoritative Indian fundamentals (P/E, sector P/E, market cap,
-    # 52-week range). Best-effort: works from an Indian IP, blocked on many cloud
-    # hosts, so it returns {} there and we fall back to the derived numbers below.
+    # Screener.in = retail-trusted CONSOLIDATED headline ratios (P/E, P/B, ROE,
+    # dividend yield, market cap), the figures users actually verify against on
+    # MoneyControl / Tickertape / Google. This is the PRIMARY source: it fixes the
+    # "numbers look fake" gap where NSE's standalone P/E (e.g. Reliance 18.66) and our
+    # rolling-window dividend yield disagreed with every consumer site. Keyless and
+    # cloud-friendly; returns {} on any failure so we fall back to NSE/yfinance.
+    sc = screener.symbol_data(symbol)
+
+    # NSE India = authoritative Indian fundamentals (sector P/E, 52-week range, market
+    # cap). Best-effort: works from an Indian IP, blocked on many cloud hosts, so it
+    # returns {} there and we fall back to the derived numbers below.
     nse_d = nse.symbol_data(symbol)
 
     # .info is SUPPLEMENTARY only — it is often empty/throttled for NSE names, which
@@ -226,17 +235,21 @@ def _live_bundle(symbol: str) -> dict:
     equity_cr = bsheet.get("shareholders_equity_cr")
     debt_cr = bsheet.get("total_debt_cr")
 
-    mc = nse_d.get("market_cap") or fi_mktcap or _num(info.get("marketCap")) or (fi_shares * price if fi_shares else None)
-    mc_cr = nse_d.get("market_cap_cr") or (round(mc / 1e7) if mc else None)
+    # Source priority for every headline ratio: Screener (consolidated, retail-trusted)
+    # -> NSE (authoritative, standalone) -> computed from statements -> yfinance .info.
+    mc = (sc.get("market_cap") or nse_d.get("market_cap") or fi_mktcap
+          or _num(info.get("marketCap")) or (fi_shares * price if fi_shares else None))
+    mc_cr = sc.get("market_cap_cr") or nse_d.get("market_cap_cr") or (round(mc / 1e7) if mc else None)
 
-    # P/E: prefer NSE's authoritative figure; else compute from market cap ÷ trailing
-    # profit; else fall back to .info.
-    pe = nse_d.get("pe") or (round(mc_cr / ttm_ni_cr, 2) if (mc_cr and ttm_ni_cr and ttm_ni_cr > 0)
-                             else _num(info.get("trailingPE")))
-    pb = (round(mc_cr / equity_cr, 2) if (mc_cr and equity_cr and equity_cr > 0)
-          else _num(info.get("priceToBook")))
-    roe = (round(ttm_ni_cr / equity_cr * 100, 2) if (ttm_ni_cr and equity_cr and equity_cr > 0)
-           else _pct(info.get("returnOnEquity")))
+    pe = (sc.get("pe") or nse_d.get("pe")
+          or (round(mc_cr / ttm_ni_cr, 2) if (mc_cr and ttm_ni_cr and ttm_ni_cr > 0) else None)
+          or _num(info.get("trailingPE")))
+    pb = (sc.get("pb")
+          or (round(mc_cr / equity_cr, 2) if (mc_cr and equity_cr and equity_cr > 0) else None)
+          or _num(info.get("priceToBook")))
+    roe = (sc.get("roe_pct")
+           or (round(ttm_ni_cr / equity_cr * 100, 2) if (ttm_ni_cr and equity_cr and equity_cr > 0) else None)
+           or _pct(info.get("returnOnEquity")))
     net_margin = (round(ttm_ni_cr / ttm_rev_cr * 100, 2) if (ttm_ni_cr and ttm_rev_cr and ttm_rev_cr > 0)
                   else _pct(info.get("profitMargins")))
     if debt_cr is not None and equity_cr:
@@ -249,8 +262,8 @@ def _live_bundle(symbol: str) -> dict:
 
     fundamentals = {"pe": pe, "pb": pb, "sector_pe": nse_d.get("sector_pe"),
                     "market_cap": mc, "market_cap_cr": mc_cr,
-                    "net_margin_pct": net_margin, "roe_pct": roe,
-                    "dividend_yield_pct": None, "debt_to_equity": d2e,
+                    "net_margin_pct": net_margin, "roe_pct": roe, "roce_pct": sc.get("roce_pct"),
+                    "dividend_yield_pct": sc.get("dividend_yield_pct"), "debt_to_equity": d2e,
                     "eps_ttm": eps_ttm, "revenue_ttm_cr": ttm_rev_cr,
                     "sector": nse_d.get("sector"), "industry": nse_d.get("industry")}
 
@@ -265,15 +278,19 @@ def _live_bundle(symbol: str) -> dict:
         dividends = [{"year": i.year, "amount": round(float(v), 2)} for i, v in dvs.items()][-6:]
     except Exception:
         pass
-    try:
-        import pandas as pd
-        if dvs is not None and not dvs.empty:
-            now = pd.Timestamp.now(tz=dvs.index.tz)
-            ttm_div = float(dvs[dvs.index >= now - pd.Timedelta(days=365)].sum())
-            if ttm_div > 0:
-                fundamentals["dividend_yield_pct"] = round(ttm_div / price * 100, 2)
-    except Exception:
-        pass
+    # Only fall back to a self-computed trailing yield when Screener didn't give one.
+    # (Our rolling-365-day sum over-counts when a special/extra dividend lands in the
+    # window, so Screener's clean figure is strongly preferred above.)
+    if fundamentals["dividend_yield_pct"] is None:
+        try:
+            import pandas as pd
+            if dvs is not None and not dvs.empty:
+                now = pd.Timestamp.now(tz=dvs.index.tz)
+                ttm_div = float(dvs[dvs.index >= now - pd.Timedelta(days=365)].sum())
+                if ttm_div > 0:
+                    fundamentals["dividend_yield_pct"] = round(ttm_div / price * 100, 2)
+        except Exception:
+            pass
     if fundamentals["dividend_yield_pct"] is None and isinstance(info.get("dividendYield"), (int, float)):
         fundamentals["dividend_yield_pct"] = info["dividendYield"]
     fundamentals = {k: v for k, v in fundamentals.items() if v is not None}
