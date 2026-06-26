@@ -525,9 +525,10 @@ def _inr_scale(tk, sample) -> float:
     return 1.0
 
 
-def _quarterly_from(tk):
-    """Quarterly results (₹ crore + EPS), INR-normalised. Works off the income
-    statement, which is far more reliable than the .info endpoint."""
+def _quarterly_from(tk, n=8):
+    """Quarterly results (₹ crore + EPS), INR-normalised, most recent first. Works
+    off the income statement, which is far more reliable than the .info endpoint.
+    yfinance typically exposes only ~4-5 quarters; `n` caps however many it returns."""
     try:
         tk, q = _stmt(tk, "quarterly_income_stmt")
         if q is None or q.empty:
@@ -538,7 +539,7 @@ def _quarterly_from(tk):
         cr = lambda v: round(float(v) * scale / 1e7) if v is not None and v == v else None
         num = lambda v: round(float(v) * scale, 2) if v is not None and v == v else None
         out = []
-        for col in list(q.columns)[:4]:
+        for col in list(q.columns)[:n]:
             out.append({"quarter": str(getattr(col, "date", lambda: col)()),
                         "revenue_cr": cr(at("Total Revenue", col)),
                         "net_income_cr": cr(at("Net Income", col)),
@@ -549,11 +550,19 @@ def _quarterly_from(tk):
         return []
 
 
-def quarterly(s):
-    """Recent quarterly revenue, net profit, operating income (₹ crore) and EPS
-    (INR-normalised so peer comparisons are apples-to-apples even when yfinance
-    reports a peer in USD)."""
-    return _quarterly_from(_ticker(s))
+def quarterly(s, n=8):
+    """Recent quarterly revenue, net profit, operating income (₹ crore) and EPS,
+    most recent first. Prefers Screener (retail-trusted, ~12 quarters of history)
+    and falls back to yfinance's statement (~4-5 quarters, INR-normalised so peer
+    comparisons stay apples-to-apples) when Screener is unreachable. `n` caps how
+    many recent quarters to return."""
+    try:
+        q = screener.quarterly_results(_base(s), n=n)
+        if q:
+            return q
+    except Exception:
+        pass
+    return _quarterly_from(_ticker(s), n=n)
 
 
 def _balance_sheet_from(tk):

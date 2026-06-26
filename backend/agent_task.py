@@ -21,10 +21,15 @@ HTTP round-trip. Session state lives in _sessions keyed by thread id.
 import json
 import os
 
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_groq import ChatGroq
 
 import market
+
+# Load backend/.env so GROQ_API_KEY is present before the Groq client is built
+# (a no-op in prod, where Render injects the vars directly).
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # Groq-hosted model. Upgraded from llama-3.3-70b to the 120B gpt-oss for stronger
 # reasoning and tighter tool-step planning — still uses your existing GROQ_API_KEY
@@ -85,21 +90,49 @@ def _llm_json(prompt: str) -> dict:
 # --------------------------------------------------------------------------- #
 def _propose(sess: dict, redirect: str = "") -> dict:
     done_tools = [c["tool"] for c in sess["context"]]
+    tool_list = "\n".join(f"- {k}: {v}" for k, v in TOOLS.items() if k != "finish")
+    ctx = "\n\n".join(f"[{c['tool']}] {c['result']}" for c in sess["context"]) or "nothing yet"
+
+    # Redirect: the user has overridden the plan, so DON'T run the "is the task
+    # already answered? -> finish" logic (that short-circuit used to silently swallow
+    # the redirect). Pick the single tool that carries out their instruction, even if
+    # a similar tool already ran. Only finish if they explicitly asked to stop.
+    if redirect:
+        prompt = (
+            f"You are an equity analyst agent working on this TASK for {sess['ticker']} (NSE):\n"
+            f"\"{sess['task']}\"\n\n"
+            f"Tools available:\n{tool_list}\n\n"
+            f"Steps already done: {done_tools or 'none'}\n"
+            f"Findings so far:\n{ctx}\n\n"
+            f"The user has REDIRECTED you with this instruction:\n\"{redirect}\"\n\n"
+            "Honour it: choose the SINGLE tool that best carries out the user's instruction "
+            "as the very next step — even if a similar tool already ran. Map their words to a "
+            "tool, e.g. 'check fundamentals'->fundamental_analysis, 'look at the chart/"
+            "technicals'->technical_analysis, 'what about the risks'->risk_assessment, "
+            "'compare the results/quarters'->quarterly_results, 'is it worth buying'->verdict, "
+            "'latest news'->news_sentiment. Choose 'finish' ONLY if the user explicitly asked "
+            "you to stop or finalise.\n"
+            'Reply ONLY as JSON: {"tool": "<tool name>", "summary": "one short sentence on what '
+            'you will do next, acknowledging the redirect"}'
+        )
+        obj = _llm_json(prompt)
+        tool = obj.get("tool", "")
+        if tool not in TOOLS:
+            tool = "finish"
+        return {"tool": tool,
+                "summary": obj.get("summary", f"Following your redirect: {redirect}.")}
 
     # Hard cap: once enough steps are gathered, always wrap up (loop can't run forever).
-    if not redirect and len(done_tools) >= MAX_STEPS:
+    if len(done_tools) >= MAX_STEPS:
         return {"tool": "finish",
                 "summary": "I've gathered enough across several steps — approve to get the final report."}
 
-    tool_list = "\n".join(f"- {k}: {v}" for k, v in TOOLS.items() if k != "finish")
-    ctx = "\n\n".join(f"[{c['tool']}] {c['result']}" for c in sess["context"]) or "nothing yet"
-    extra = f"\nThe user redirected you: '{redirect}'. Honour it." if redirect else ""
     prompt = (
         f"You are an equity analyst agent working on this TASK for {sess['ticker']} (NSE):\n"
         f"\"{sess['task']}\"\n\n"
         f"Tools available:\n{tool_list}\n\n"
         f"Steps already done: {done_tools or 'none'}\n"
-        f"Findings so far:\n{ctx}\n{extra}\n\n"
+        f"Findings so far:\n{ctx}\n\n"
         "FIRST decide: do the findings so far ALREADY answer the task?\n"
         "- A simple/factual question is fully answered by ONE matching tool — once that "
         "tool has run, set done=true. (price->quote, 52-week->fifty_two_week, "
@@ -121,8 +154,9 @@ def _propose(sess: dict, redirect: str = "") -> dict:
     tool = obj.get("tool", "finish")
     if tool not in TOOLS:
         tool = "finish"
-    # Repeat-guard: re-proposing a finished tool (without a redirect) means it's spinning.
-    if tool != "finish" and tool in done_tools and not redirect:
+    # Repeat-guard: re-proposing an already-finished tool means it's spinning (redirects
+    # take the dedicated branch above, so here a repeat is always unintended).
+    if tool != "finish" and tool in done_tools:
         return {"tool": "finish",
                 "summary": "I've already covered that — approve to get the final report."}
     return {"tool": tool, "summary": obj.get("summary", "Proceed to the next step.")}

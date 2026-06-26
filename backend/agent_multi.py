@@ -26,12 +26,17 @@ import json
 import os
 from typing import TypedDict, Optional
 
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
 
-from tools import _load          # mock fallback lives inside market.py
 import market
+
+# Load backend/.env so GROQ_API_KEY (and optional LangSmith vars) are present before
+# the Groq client is built below. In prod (Render) the vars are set in the real
+# environment and the missing .env is a harmless no-op.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 MODEL = "llama-3.3-70b-versatile"
 _llm = ChatGroq(model=MODEL, temperature=0.3, api_key=os.environ.get("GROQ_API_KEY", ""))

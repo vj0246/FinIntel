@@ -12,9 +12,8 @@ python-multipart==0.0.18
 pypdf==5.1.0
 python-docx==1.1.2
 
-# Agent stack (the app imports these — needed in prod, so kept here, not only in
-# requirements-langgraph.txt, so a single `pip install -r requirements.txt` on
-# Render installs everything the server needs).
+# Agent stack — the app imports these, so a single `pip install -r requirements.txt`
+# on Render installs everything the server needs.
 langgraph>=0.2.70,<0.3.0
 langchain-core>=0.3.29,<0.4.0
 langchain-groq>=0.2.3,<0.3.0

@@ -14,6 +14,7 @@ import json
 import os
 import re
 
+from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_groq import ChatGroq
@@ -21,6 +22,10 @@ from langgraph.prebuilt import create_react_agent
 
 import market
 import docstore
+
+# Load backend/.env so GROQ_API_KEY is present before the Groq client is built
+# (a no-op in prod, where Render injects the vars directly).
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # The active chat thread for the in-flight request. The document Q&A tool reads
 # this to find the right uploaded document (a tool only receives the LLM's args,
@@ -232,10 +237,14 @@ def get_analyst_ratings(ticker: str) -> str:
 
 
 @tool
-def get_quarterly_results(ticker: str) -> str:
-    """Recent quarterly revenue and net profit, in rupees crore (live-only data)."""
-    q = market.quarterly(ticker)
-    return json.dumps(q, default=str) if q else "Quarterly results aren't available for this stock (live-only)."
+def get_quarterly_results(ticker: str, quarters: int = 8) -> str:
+    """Recent quarterly results (revenue, net profit, operating income in ₹ crore,
+    plus EPS), most recent first. Pass `quarters` to control how many recent
+    quarters to return (default 8, max 12) — e.g. set quarters=8 when the user
+    asks for 'the last 8 quarters'."""
+    n = max(1, min(int(quarters or 8), 12))
+    q = market.quarterly(ticker, n=n)
+    return json.dumps(q, default=str) if q else "Quarterly results aren't available for this stock."
 
 
 @tool

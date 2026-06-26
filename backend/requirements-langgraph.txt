@@ -1,5 +1,0 @@
-# Extra deps for the LangGraph variant (agent_langgraph.py + agent_multi.py).
-# Install on top of requirements.txt:  pip install -r requirements-langgraph.txt
-langgraph>=0.2.70,<0.3.0
-langchain-core>=0.3.29,<0.4.0
-langchain-groq>=0.2.3,<0.3.0

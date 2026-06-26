@@ -32,6 +32,7 @@ HEADERS = {
 
 _SESSION = None
 _CACHE: dict = {}
+_PAGE_CACHE: dict = {}      # raw HTML per symbol, shared by ratios + quarterly parsing
 _TTL = 600
 _DOWN_UNTIL = 0.0
 _COOLDOWN = 300
@@ -46,6 +47,16 @@ _WANT = {
     "Market Cap": "market_cap_cr",       # Screener reports market cap in ₹ crore
     "Current Price": "price",
     "High / Low": "_high_low",
+}
+
+# Screener "Quarterly Results" row label -> our key. Values are already in ₹ crore
+# (EPS in ₹). Banks/NBFCs use "Revenue"/"Financing Profit" where most names show
+# "Sales"/"Operating Profit", so each key lists the labels to try in order.
+_Q_ROWS = {
+    "revenue_cr": ("Sales", "Revenue"),
+    "net_income_cr": ("Net Profit",),
+    "operating_income_cr": ("Operating Profit", "Financing Profit"),
+    "eps": ("EPS in Rs", "EPS"),
 }
 
 
@@ -106,35 +117,104 @@ def _parse(txt: str) -> dict:
     return out
 
 
-def symbol_data(ticker: str) -> dict:
-    """Consolidated headline ratios for one NSE symbol, or {} if unreachable.
+def _key(ticker: str) -> str:
+    return (ticker or "").strip().upper().replace(".NS", "").replace(".BO", "")
 
-    Tries the consolidated page first (correct for most companies), then the
-    standalone page (banks/finance names that have no consolidated view)."""
+
+def _get_page(key: str) -> str:
+    """Fetch a Screener company page as raw HTML (consolidated preferred, then
+    standalone for banks/finance names), cached and shared by the ratio and
+    quarterly parsers. Returns '' on failure or while the circuit-breaker is open."""
     global _SESSION, _DOWN_UNTIL
-    key = (ticker or "").strip().upper().replace(".NS", "").replace(".BO", "")
     if not key:
-        return {}
+        return ""
     now = time.time()
     if now < _DOWN_UNTIL:
-        return {}
-    if key in _CACHE and now - _CACHE[key][0] < _TTL:
-        return _CACHE[key][1]
-
-    out = {}
+        return ""
+    if key in _PAGE_CACHE and now - _PAGE_CACHE[key][0] < _TTL:
+        return _PAGE_CACHE[key][1]
+    text = ""
     try:
         s = _session()
         for path in (f"/company/{key}/consolidated/", f"/company/{key}/"):
             r = s.get(BASE + path, timeout=10)
             if r.status_code == 200 and "Stock P/E" in r.text:
-                parsed = _parse(r.text)
-                if parsed.get("pe") or parsed.get("market_cap_cr"):
-                    out = parsed
-                    break
+                text = r.text
+                break
     except Exception:
         _SESSION = None
         _DOWN_UNTIL = now + _COOLDOWN
-        return {}
+        return ""
+    _PAGE_CACHE[key] = (now, text)
+    return text
 
+
+def symbol_data(ticker: str) -> dict:
+    """Consolidated headline ratios for one NSE symbol, or {} if unreachable.
+
+    Tries the consolidated page first (correct for most companies), then the
+    standalone page (banks/finance names that have no consolidated view)."""
+    key = _key(ticker)
+    if not key:
+        return {}
+    now = time.time()
+    if key in _CACHE and now - _CACHE[key][0] < _TTL:
+        return _CACHE[key][1]
+    text = _get_page(key)
+    if not text:                         # circuit open / fetch failed — retry later
+        return {}
+    parsed = _parse(text)
+    out = parsed if (parsed.get("pe") or parsed.get("market_cap_cr")) else {}
     _CACHE[key] = (now, out)
     return out
+
+
+def _parse_quarters(txt: str, n: int) -> list:
+    """Parse Screener's 'Quarterly Results' table into recent-first rows
+    (revenue / net profit / operating income in ₹ crore, plus EPS)."""
+    m = re.search(r'id="quarters".*?</section>', txt, re.S)
+    if not m:
+        return []
+    block = m.group(0)
+    thead = re.search(r"<thead.*?</thead>", block, re.S)
+    if not thead:
+        return []
+    cols = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<th[^>]*>(.*?)</th>", thead.group(0), re.S)]
+    cols = [c for c in cols if c]        # drop the empty row-label header cell
+    if not cols:
+        return []
+
+    rows = {}
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", block, re.S):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)
+        if not cells:
+            continue
+        label = html.unescape(re.sub(r"<[^>]+>", "", cells[0])).replace("\xa0", " ").strip()
+        rows[label] = [_num(re.sub(r"<[^>]+>", "", c)) for c in cells[1:]]
+
+    def series(names):
+        for nm in names:
+            for label, vals in rows.items():
+                if label.lower().startswith(nm.lower()):
+                    return vals
+        return []
+
+    keyed = {k: series(names) for k, names in _Q_ROWS.items()}
+    out = []
+    for i, q in enumerate(cols):
+        rec = {"quarter": q}
+        for k, vals in keyed.items():
+            v = vals[i] if i < len(vals) else None
+            rec[k] = (round(v) if k != "eps" else v) if v is not None else None
+        out.append(rec)
+    out.reverse()                        # most recent quarter first
+    return out[:max(1, n)]
+
+
+def quarterly_results(ticker: str, n: int = 8) -> list:
+    """Recent quarterly results (revenue, net profit, operating income in ₹ crore,
+    plus EPS) from Screener's Quarterly Results table — up to ~12 quarters, far more
+    history than yfinance's ~4. Most recent first. Returns [] if unreachable so the
+    caller can fall back to yfinance."""
+    text = _get_page(_key(ticker))
+    return _parse_quarters(text, n) if text else []
