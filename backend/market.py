@@ -62,6 +62,34 @@ def _history(tk, **kw):
     raise ValueError("no history")
 
 
+def _stmt(tk, *attrs, tries=3):
+    """First non-empty financial statement among `attrs`, with the same retry+backoff
+    that _history uses. THIS is what makes fundamentals reliable: Yahoo returns an
+    EMPTY statement under load and yfinance caches that empty result on the Ticker
+    instance, so each retry rebuilds a FRESH client to force a real refetch. The old
+    single-shot fetch gave up after one empty response, which left every derived ratio
+    (P/E, P/B, ROE, margins) blank whenever Yahoo was throttling — the bug behind the
+    all-"no figure supplied" fundamentals table.
+
+    Returns (client, df): the working client is handed back so the caller reads
+    `.info` / currency off the same session. df is None if every attempt came back
+    empty."""
+    sym = getattr(tk, "ticker", None)
+    for attempt in range(tries):
+        client = tk if attempt == 0 else _ticker(sym)
+        try:
+            for attr in attrs:
+                df = getattr(client, attr)
+                if df is not None and not df.empty:
+                    return client, df
+        except Exception:
+            pass
+        if not sym:
+            break
+        time.sleep(0.5 * (attempt + 1))
+    return tk, None
+
+
 # --------------------------------------------------------------------------- #
 # Sample bundle from embedded data
 # --------------------------------------------------------------------------- #
@@ -146,14 +174,22 @@ def _live_bundle(symbol: str) -> dict:
 
     price = closes[-1]
 
-    # fast_info: lightweight + reliable shares and market cap (no .info dependency).
+    # fast_info: lightweight shares + market cap. Retried on a FRESH client because a
+    # throttled empty response otherwise leaves market cap — and the P/E derived from
+    # it — blank. Only retries when the first attempt comes back empty (happy path is
+    # a single call).
     fi_shares = fi_mktcap = None
-    try:
-        fi = tk.fast_info
-        fi_shares = _num(getattr(fi, "shares", None))
-        fi_mktcap = _num(getattr(fi, "market_cap", None))
-    except Exception:
-        pass
+    for attempt in range(3):
+        client = tk if attempt == 0 else _ticker(symbol)
+        try:
+            fi = client.fast_info
+            fi_shares = _num(getattr(fi, "shares", None))
+            fi_mktcap = _num(getattr(fi, "market_cap", None))
+        except Exception:
+            pass
+        if fi_shares or fi_mktcap:
+            break
+        time.sleep(0.4 * (attempt + 1))
 
     # NSE India = authoritative Indian fundamentals (P/E, sector P/E, market cap,
     # 52-week range). Best-effort: works from an Indian IP, blocked on many cloud
@@ -161,12 +197,19 @@ def _live_bundle(symbol: str) -> dict:
     nse_d = nse.symbol_data(symbol)
 
     # .info is SUPPLEMENTARY only — it is often empty/throttled for NSE names, which
-    # was the bug behind "Valuation: {}". We never depend on it for core ratios.
+    # was the bug behind "Valuation: {}". We never depend on it for core ratios, but a
+    # one-shot retry on a fresh client recovers the supplementary fields (beta, targets)
+    # far more often than giving up on the first empty response.
     info = {}
-    try:
-        info = tk.info or {}
-    except Exception:
-        pass
+    for attempt in range(2):
+        client = tk if attempt == 0 else _ticker(symbol)
+        try:
+            info = client.info or {}
+        except Exception:
+            info = {}
+        if len(info) > 5:
+            break
+        time.sleep(0.4 * (attempt + 1))
     def _pct(v):
         return round(v * 100, 2) if isinstance(v, (int, float)) and v == v else None
 
@@ -469,7 +512,7 @@ def _quarterly_from(tk):
     """Quarterly results (₹ crore + EPS), INR-normalised. Works off the income
     statement, which is far more reliable than the .info endpoint."""
     try:
-        q = tk.quarterly_income_stmt
+        tk, q = _stmt(tk, "quarterly_income_stmt")
         if q is None or q.empty:
             return []
         def at(row, col):
@@ -500,9 +543,7 @@ def _balance_sheet_from(tk):
     """Key balance-sheet items in ₹ crore (INR-normalised). Works off the balance
     sheet statement, independent of the flaky .info endpoint."""
     try:
-        bs = tk.quarterly_balance_sheet
-        if bs is None or bs.empty:
-            bs = tk.balance_sheet
+        tk, bs = _stmt(tk, "quarterly_balance_sheet", "balance_sheet")
         if bs is None or bs.empty:
             return {}
         col = bs.columns[0]
