@@ -169,3 +169,244 @@ h1 { font-weight: 700; font-size: 30px; letter-spacing: -0.02em; color: var(--in
 .chat-input button { font-weight: 600; font-size: 13px; background: var(--brand); color: #fff; border: none; border-radius: 9px; padding: 0 18px; cursor: pointer; }
 .chat-input button:hover:not(:disabled) { background: var(--brand-deep); }
 .chat-input button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ==================================================================== */
+/* MOBILE TAB SWITCHER                                                   */
+/* ==================================================================== */
+.mobile-tabs {
+  display: none;
+  position: sticky;
+  top: 60px;
+  z-index: 9;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  padding: 0;
+}
+.mobile-tabs button {
+  flex: 1;
+  padding: 12px 0;
+  font-family: var(--body);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2.5px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mobile-tabs button.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+}
+.mobile-tabs button:hover:not(.active) {
+  color: var(--sub);
+}
+
+/* ==================================================================== */
+/* RESPONSIVE: TABLET (≤ 980px)                                          */
+/* ==================================================================== */
+@media (max-width: 980px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .side {
+    border-left: none;
+    border-top: 1px solid var(--line);
+    height: auto;
+    position: static;
+  }
+  .mobile-tabs {
+    display: flex;
+  }
+  /* In tab mode: hide inactive panel */
+  .app .main.tab-hidden,
+  .app .side.tab-hidden {
+    display: none;
+  }
+}
+
+/* ==================================================================== */
+/* RESPONSIVE: MOBILE (≤ 768px)                                          */
+/* ==================================================================== */
+@media (max-width: 768px) {
+  /* Topbar */
+  .topbar {
+    height: 52px;
+    padding: 0 16px;
+  }
+  .brand-name { font-size: 14.5px; }
+  .topbar-sub { font-size: 9.5px; letter-spacing: 0.03em; }
+
+  /* Main content area */
+  .desk {
+    padding: 20px 16px 60px;
+  }
+  h1 { font-size: 24px; }
+  .sub { font-size: 13.5px; margin-top: 6px; }
+  .eyebrow { font-size: 10px; margin-bottom: 8px; }
+
+  /* Task setup */
+  .task-setup {
+    padding: 14px;
+    border-radius: 12px;
+    margin: 16px 0 8px;
+  }
+  .task-setup .row1 { flex-wrap: wrap; }
+  .task-setup .row2 { flex-direction: column; gap: 10px; }
+  .ticker-input { padding: 12px 13px; font-size: 15px; min-height: 44px; }
+  .task-input { padding: 12px 14px; font-size: 15px; min-height: 44px; }
+  .run { padding: 12px 22px; min-height: 44px; font-size: 15px; width: 100%; }
+
+  /* Presets: 2 per row */
+  .presets { gap: 6px; }
+  .preset {
+    padding: 10px 12px;
+    font-size: 12px;
+    min-height: 40px;
+    flex: 1 1 calc(50% - 6px);
+    text-align: center;
+  }
+
+  /* Approval gate */
+  .gate {
+    padding: 16px;
+    border-radius: 12px;
+  }
+  .gate-btns {
+    flex-direction: column;
+  }
+  .gate-btns button {
+    width: 100%;
+    padding: 14px 20px;
+    font-size: 15px;
+    min-height: 48px;
+  }
+  .revise {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .revise input {
+    padding: 12px 13px;
+    font-size: 14px;
+    min-height: 44px;
+  }
+  .revise button {
+    padding: 12px 18px;
+    font-size: 14px;
+    min-height: 44px;
+    width: 100%;
+  }
+
+  /* Chat panel */
+  .chat-top { padding: 14px; }
+  .chat-title { font-size: 14px; }
+  .chat-sub { font-size: 12px; margin-bottom: 10px; }
+  .chat-body { padding: 12px; gap: 10px; }
+  .chat-input { padding: 10px 12px; }
+  .chat-input input {
+    padding: 12px 13px;
+    font-size: 15px;
+    min-height: 44px;
+  }
+  .chat-input button {
+    padding: 12px 16px;
+    font-size: 14px;
+    min-height: 44px;
+  }
+  .bubble { max-width: 96%; font-size: 14px; }
+  .bubble.user { padding: 10px 14px; }
+  .bubble.bot { padding: 12px 14px; }
+
+  /* Suggest buttons */
+  .suggest button {
+    padding: 12px;
+    font-size: 13.5px;
+    min-height: 44px;
+  }
+
+  /* Upload */
+  .upload-btn {
+    padding: 10px 14px;
+    font-size: 13px;
+    min-height: 44px;
+  }
+  .doc-chip .doc-name { max-width: 140px; }
+
+  /* Search dropdown */
+  .ts-list { max-height: 220px; }
+  .ts-item { padding: 12px 10px; min-height: 44px; }
+
+  /* Spine / timeline */
+  .event { padding: 0 0 16px 30px; }
+  .spine::before { left: 7px; }
+  .node { left: 1px; width: 13px; height: 13px; }
+
+  /* Chart */
+  .chart { padding: 8px 4px 2px; border-radius: 10px; }
+
+  /* Tables */
+  .md table { font-size: 11px; }
+  .md th, .md td { padding: 5px 6px; }
+
+  /* Footnote */
+  .footnote { font-size: 11px; margin-top: 20px; }
+
+  /* Empty state */
+  .empty { padding: 20px 16px; font-size: 13px; }
+
+  /* Side (chat) in tab mode gets full viewport height minus topbar+tabs */
+  .side:not(.tab-hidden) {
+    height: calc(100vh - 52px - 44px);
+    min-height: 400px;
+  }
+  .chat {
+    height: calc(100vh - 52px - 44px);
+    min-height: 400px;
+  }
+}
+
+/* ==================================================================== */
+/* RESPONSIVE: SMALL PHONE (≤ 480px)                                     */
+/* ==================================================================== */
+@media (max-width: 480px) {
+  .topbar {
+    height: 48px;
+    padding: 0 12px;
+  }
+  .brand-mark { font-size: 16px; }
+  .brand-name { font-size: 13.5px; }
+  .topbar-sub { display: none; }  /* hide subtitle on very small screens */
+
+  .desk { padding: 16px 12px 50px; }
+  h1 { font-size: 21px; }
+  .sub { font-size: 13px; }
+
+  .task-setup { padding: 12px; margin: 14px 0 8px; }
+  .nse { font-size: 9px; padding: 4px 6px; }
+
+  .preset {
+    flex: 1 1 100%;    /* single column on very small screens */
+    font-size: 12px;
+  }
+
+  .gate { padding: 14px; }
+
+  .chat-top { padding: 12px; }
+  .chat-body { padding: 10px; }
+
+  .mobile-tabs { top: 48px; }
+  .mobile-tabs button { font-size: 13px; padding: 10px 0; }
+}
+
+/* ==================================================================== */
+/* SAFE AREA (phones with gesture bars / notch)                          */
+/* ==================================================================== */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .chat-input {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  }
+  .desk {
+    padding-bottom: calc(60px + env(safe-area-inset-bottom));
+  }
+}

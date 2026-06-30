@@ -28,7 +28,15 @@
       "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=/c/Users/vivaa/Downloads/agent-demo/agent-demo/backend /c/Users/vivaa/Downloads/agent-demo/agent-demo/backend/.mumpy/Scripts/python.exe -c ' *)",
       "Bash(curl -s -N --max-time 80 \"https://mumpy-demo.onrender.com/api/chat?ticker=TCS&q=call%20get_fundamentals%20and%20get_balance_sheet%20only&thread=d$\\(date +%s\\)\")",
       "Bash(ls *.txt *.cfg *.toml)",
-      "Bash(ls .mumpy/Scripts/python.exe)"
+      "Bash(ls .mumpy/Scripts/python.exe)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.mumpy/Scripts/python.exe -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 ./.mumpy/Scripts/python.exe -c \"import market, screener; print\\('IMPORT OK'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(rm -f backend/app.py backend/agent.py backend/agent_langgraph.py backend/tools.py backend/requirements-langgraph.txt backend/data/INFY.json backend/data/RELIANCE.json backend/data/TCS.json backend/__pycache__/tools.cpython-310.pyc frontend/src/App_simple.jsx)",
+      "Bash(rmdir backend/data)",
+      "Bash(git commit *)"
     ]
   }
 }

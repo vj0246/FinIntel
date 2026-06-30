@@ -26,6 +26,7 @@ from langchain_core.messages import HumanMessage
 from langchain_groq import ChatGroq
 
 import market
+import guardrails as gr
 
 # Load backend/.env so GROQ_API_KEY is present before the Groq client is built
 # (a no-op in prod, where Render injects the vars directly).
@@ -75,6 +76,7 @@ TOOLS = {
 }
 
 MAX_STEPS = 6   # hard cap so the approval loop ALWAYS terminates
+MAX_REDIRECTS = 3  # prevent infinite redirect loops
 
 
 def _llm_json(prompt: str) -> dict:
@@ -442,7 +444,7 @@ async def start_task(ticker: str, task: str, thread_id: str):
         yield {"type": "final", "text": f"Couldn't start: {e}"}
         return
 
-    sess = {"ticker": tk, "task": task, "context": [], "pending": None, "source": source}
+    sess = {"ticker": tk, "task": task, "context": [], "pending": None, "source": source, "redirects": 0}
     _sessions[thread_id] = sess
     src_note = "live market data" if source == "live" else "sample data (live feed unavailable)"
     yield {"type": "intro", "text": f"Working on: \"{task}\" for {tk}. Using {src_note}. I'll propose each step for your approval."}
@@ -459,6 +461,11 @@ async def step_task(thread_id: str, decision: str):
 
     # Redirect: re-propose honouring the user's instruction
     if decision.startswith("redirect:"):
+        sess["redirects"] = sess.get("redirects", 0) + 1
+        if sess["redirects"] > MAX_REDIRECTS:
+            yield {"type": "final", "text": gr.sanitise_output(_report(sess))}
+            _sessions.pop(thread_id, None)
+            return
         prop = _propose(sess, redirect=decision[len("redirect:"):].strip())
         sess["pending"] = prop
         yield {"type": "propose", "tool": prop["tool"], "summary": prop["summary"], "thread_id": thread_id}
@@ -466,14 +473,14 @@ async def step_task(thread_id: str, decision: str):
 
     # Stop: finalise now
     if decision == "stop":
-        yield {"type": "final", "text": _report(sess)}
+        yield {"type": "final", "text": gr.sanitise_output(_report(sess))}
         _sessions.pop(thread_id, None)
         return
 
     # Approve the pending step
     prop = sess["pending"]
     if not prop or prop["tool"] == "finish":
-        yield {"type": "final", "text": _report(sess)}
+        yield {"type": "final", "text": gr.sanitise_output(_report(sess))}
         _sessions.pop(thread_id, None)
         return
 

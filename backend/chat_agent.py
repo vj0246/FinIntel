@@ -8,8 +8,11 @@ Guardrails to keep answers good:
   - recursion_limit caps the loop so it can't spin forever
   - tools return terminal text when data is missing; the system prompt forbids retrying
   - the agent answers only from tool output, never invents numbers
+  - 120-second overall timeout prevents runaway agent loops
+  - output sanitisation strips accidental PII and caps response length
 """
 
+import asyncio
 import json
 import os
 import re
@@ -22,6 +25,7 @@ from langgraph.prebuilt import create_react_agent
 
 import market
 import docstore
+import guardrails as gr
 
 # Load backend/.env so GROQ_API_KEY is present before the Groq client is built
 # (a no-op in prod, where Render injects the vars directly).
@@ -358,17 +362,23 @@ async def run_chat(ticker: str, question: str, thread_id: str):
         f"{doc_note}\n{question}"))
     messages = history + [user_msg]
     final_answer = ""
+    _start = asyncio.get_event_loop().time()
+    _TIMEOUT = 120  # seconds — hard cap on total agent execution time
     try:
         async for update in AGENT.astream({"messages": messages},
                                           config={"recursion_limit": 30}, stream_mode="updates"):
+            # Timeout guard: abort if the agent has been running too long
+            if asyncio.get_event_loop().time() - _start > _TIMEOUT:
+                yield {"type": "answer", "text": "The analysis is taking too long. Try a more specific question."}
+                return
             for node, payload in update.items():
                 for msg in payload.get("messages", []):
                     if isinstance(msg, AIMessage):
                         for tc in (msg.tool_calls or []):
                             yield {"type": "tool_call", "name": tc["name"], "args": tc["args"]}
                         if not msg.tool_calls and msg.content:
-                            final_answer = msg.content
-                            yield {"type": "answer", "text": msg.content}
+                            final_answer = gr.sanitise_output(msg.content)
+                            yield {"type": "answer", "text": final_answer}
                     elif isinstance(msg, ToolMessage):
                         if msg.name == "get_price_chart":
                             try:

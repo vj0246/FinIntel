@@ -22,6 +22,7 @@ Three teaching points:
   - LangSmith: set env vars, every node + LLM call is traced automatically
 """
 
+import asyncio
 import json
 import os
 from typing import TypedDict, Optional
@@ -32,6 +33,7 @@ from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
 
 import market
+import guardrails as gr
 
 # Load backend/.env so GROQ_API_KEY (and optional LangSmith vars) are present before
 # the Groq client is built below. In prod (Render) the vars are set in the real
@@ -146,14 +148,22 @@ def _events_from_update(update: dict):
 async def start_run(ticker: str, thread_id: str):
     """Run agents, store proposal, emit approval_request at the end."""
     collected = {"ticker": ticker, "data": None, "research": "", "risk": "", "recommendation": "", "action": ""}
+    _start = asyncio.get_event_loop().time()
+    _TIMEOUT = 90  # seconds — hard cap on full graph execution
 
     async for update in GRAPH.astream({"ticker": ticker}, stream_mode="updates"):
+        # Timeout guard
+        if asyncio.get_event_loop().time() - _start > _TIMEOUT:
+            yield {"type": "error", "text": "Analysis timed out. Try again or pick a different stock."}
+            return
         for ev in _events_from_update(update):
             yield ev
         for node in ("gather", "researcher", "risk_check", "synthesize"):
             if node in update:
                 collected.update({k: v for k, v in update[node].items() if v is not None})
 
+    # Sanitise the synthesised recommendation
+    collected["recommendation"] = gr.sanitise_output(collected.get("recommendation", ""))
     _pending[thread_id] = collected
 
     yield {

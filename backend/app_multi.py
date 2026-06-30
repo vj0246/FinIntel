@@ -2,6 +2,7 @@
 app_multi.py
 ------------
 FastAPI for the multi-agent + human-in-the-loop demo.
+Production-grade: guardrails, rate limiting, request tracing, smart caching.
 
 Two SSE endpoints because HITL is two-phase:
   GET /api/analyze?ticker=RELIANCE&thread=<uuid>
@@ -14,30 +15,67 @@ Run:  uvicorn app_multi:app --reload --port 8000
 
 import json
 import os
+import uuid
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from agent_multi import start_run, resume_run
 from chat_agent import run_chat
 from agent_task import start_task, step_task
 import companies
 import docstore
+import guardrails as gr
+from rate_limiter import RateLimitMiddleware
 
 app = FastAPI(title="Multi-Agent Equity Desk (HITL)")
+
+# Rate limiting — applied BEFORE CORS so blocked requests still get proper headers
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+# --------------------------------------------------------------------------- #
+# Request ID middleware — attaches a unique ID to every request/response
+# --------------------------------------------------------------------------- #
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 def sse(event: dict) -> str:
     return f"data: {json.dumps(event, default=str)}\n\n"
 
 
+def _cache_headers() -> dict:
+    """Return Cache-Control headers based on market hours."""
+    try:
+        from market import _market_open
+        if _market_open():
+            return {"Cache-Control": "public, max-age=60"}
+        return {"Cache-Control": "public, max-age=3600"}
+    except Exception:
+        return {"Cache-Control": "public, max-age=60"}
+
+
+# --------------------------------------------------------------------------- #
+# Endpoints
+# --------------------------------------------------------------------------- #
 @app.get("/api/analyze")
 async def analyze(ticker: str, thread: str):
+    t = gr.validate_ticker(ticker)
+    tid = gr.validate_uuid(thread)
+
     async def stream():
         try:
-            async for ev in start_run(ticker, thread):
+            async for ev in start_run(t, tid):
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
@@ -48,9 +86,12 @@ async def analyze(ticker: str, thread: str):
 
 @app.get("/api/resume")
 async def resume(thread: str, decision: str):
+    tid = gr.validate_uuid(thread)
+    d = gr.validate_text(decision, max_len=500, field_name="Decision")
+
     async def stream():
         try:
-            async for ev in resume_run(thread, decision):
+            async for ev in resume_run(tid, d):
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
@@ -61,9 +102,13 @@ async def resume(thread: str, decision: str):
 
 @app.get("/api/task/start")
 async def task_start(ticker: str, task: str, thread: str):
+    t = gr.validate_ticker(ticker)
+    tsk = gr.validate_text(task, max_len=1000, field_name="Task")
+    tid = gr.validate_uuid(thread)
+
     async def stream():
         try:
-            async for ev in start_task(ticker, task, thread):
+            async for ev in start_task(t, tsk, tid):
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
@@ -74,9 +119,12 @@ async def task_start(ticker: str, task: str, thread: str):
 
 @app.get("/api/task/step")
 async def task_step(thread: str, decision: str):
+    tid = gr.validate_uuid(thread)
+    d = gr.validate_text(decision, max_len=500, field_name="Decision")
+
     async def stream():
         try:
-            async for ev in step_task(thread, decision):
+            async for ev in step_task(tid, d):
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
@@ -87,9 +135,24 @@ async def task_step(thread: str, decision: str):
 
 @app.get("/api/chat")
 async def chat(ticker: str, q: str, thread: str):
+    t = gr.validate_ticker(ticker)
+    question = gr.validate_text(q, max_len=2000, field_name="Question")
+    tid = gr.validate_uuid(thread)
+
+    # Prompt injection check
+    if gr.check_prompt_injection(question):
+        async def blocked():
+            yield sse({"type": "answer", "text": "I can only help with financial and stock-related questions. Please rephrase your query."})
+            yield sse({"type": "done"})
+        return StreamingResponse(blocked(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     async def stream():
         try:
-            async for ev in run_chat(ticker, q, thread):
+            async for ev in run_chat(t, question, tid):
+                # Sanitise LLM output
+                if ev.get("type") == "answer" and ev.get("text"):
+                    ev["text"] = gr.sanitise_output(ev["text"])
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
@@ -101,12 +164,19 @@ async def chat(ticker: str, q: str, thread: str):
 @app.get("/api/symbols")
 async def symbols(q: str = ""):
     """Autocomplete for the search bar: company names + NSE tickers."""
-    return {"results": companies.search(q, limit=8)}
+    results = companies.search(q, limit=8)
+    return JSONResponse(
+        content={"results": results},
+        headers={"Cache-Control": "public, max-age=3600"},  # static data
+    )
 
 
 @app.post("/api/upload")
 async def upload(thread: str = Form(...), file: UploadFile = File(...)):
     """Attach a PDF / Word / text document to a chat thread for Q&A."""
+    tid = gr.validate_uuid(thread)
+    gr.validate_file_extension(file.filename)
+
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file.")
@@ -116,13 +186,14 @@ async def upload(thread: str = Form(...), file: UploadFile = File(...)):
         text = docstore.extract_text(file.filename, raw)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    meta = docstore.add_document(thread, file.filename, text)
+    meta = docstore.add_document(tid, file.filename, text)
     return {"ok": True, **meta}
 
 
 @app.delete("/api/upload")
 async def upload_clear(thread: str):
-    docstore.clear(thread)
+    tid = gr.validate_uuid(thread)
+    docstore.clear(tid)
     return {"ok": True}
 
 
@@ -130,3 +201,25 @@ async def upload_clear(thread: str):
 async def health():
     return {"ok": True, "has_key": bool(os.environ.get("GROQ_API_KEY")),
             "langsmith": bool(os.environ.get("LANGCHAIN_API_KEY"))}
+
+
+@app.get("/api/cache/status")
+async def cache_status():
+    """Debug endpoint: cache stats, TTL mode, and market status."""
+    import market
+    try:
+        is_open = market._market_open()
+    except Exception:
+        is_open = None
+
+    bundle_ttl = market._get_ttl()
+    quote_ttl = market._get_quote_ttl()
+    cached_tickers = list(market._CACHE.keys())
+
+    return {
+        "market_open": is_open,
+        "bundle_ttl_seconds": bundle_ttl,
+        "quote_ttl_seconds": quote_ttl,
+        "cached_tickers": cached_tickers,
+        "cached_count": len(cached_tickers),
+    }

@@ -33,9 +33,17 @@ HEADERS = {
 _SESSION = None
 _CACHE: dict = {}
 _PAGE_CACHE: dict = {}      # raw HTML per symbol, shared by ratios + quarterly parsing
-_TTL = 600
+_TTL_MARKET = 600        # 10 min during market hours
+_TTL_OFFHOURS = 86400    # 24 hours outside market hours
 _DOWN_UNTIL = 0.0
 _COOLDOWN = 300
+
+def _get_ttl() -> int:
+    try:
+        from market import _market_open
+        return _TTL_MARKET if _market_open() else _TTL_OFFHOURS
+    except Exception:
+        return _TTL_MARKET
 
 # Screener label -> our normalised key. Only the headline ratios we trust it for.
 _WANT = {
@@ -131,7 +139,7 @@ def _get_page(key: str) -> str:
     now = time.time()
     if now < _DOWN_UNTIL:
         return ""
-    if key in _PAGE_CACHE and now - _PAGE_CACHE[key][0] < _TTL:
+    if key in _PAGE_CACHE and now - _PAGE_CACHE[key][0] < _get_ttl():
         return _PAGE_CACHE[key][1]
     text = ""
     try:
@@ -158,7 +166,7 @@ def symbol_data(ticker: str) -> dict:
     if not key:
         return {}
     now = time.time()
-    if key in _CACHE and now - _CACHE[key][0] < _TTL:
+    if key in _CACHE and now - _CACHE[key][0] < _get_ttl():
         return _CACHE[key][1]
     text = _get_page(key)
     if not text:                         # circuit open / fetch failed — retry later

@@ -8,18 +8,95 @@ the UI shows as a badge, so sample data is never mistaken for live.
 """
 
 import time
+import datetime
 from seed_data import SEEDS
 import nse
 import screener
 
 _CACHE: dict = {}
-_TTL = 300
-# The full bundle (chart, fundamentals, news) is fine cached for 5 min, but the
-# live PRICE must refresh far more often or it shows yesterday's close while the
-# market is open. So the spot quote gets its own short-lived cache.
+# TTLs are now dynamic — see _get_ttl() and _get_quote_ttl()
+_TTL_MARKET = 300        # 5 min during market hours
+_TTL_OFFHOURS = 86400    # 24 hours outside market hours
+_QUOTE_TTL_MARKET = 20   # 20 sec during market hours
+_QUOTE_TTL_OFFHOURS = 3600  # 1 hour outside market hours
 _QUOTE_CACHE: dict = {}
-_QUOTE_TTL = 20
 _SEED = set(SEEDS)
+
+
+# --------------------------------------------------------------------------- #
+# Market hours detection (NSE: Mon-Fri 9:15-15:30 IST)
+# --------------------------------------------------------------------------- #
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+# NSE holidays 2025-2026 (dates the exchange is closed)
+_NSE_HOLIDAYS = {
+    # 2025
+    datetime.date(2025, 2, 26),   # Mahashivratri
+    datetime.date(2025, 3, 14),   # Holi
+    datetime.date(2025, 3, 31),   # Id-Ul-Fitr
+    datetime.date(2025, 4, 10),   # Shri Mahavir Jayanti
+    datetime.date(2025, 4, 14),   # Dr. Ambedkar Jayanti
+    datetime.date(2025, 4, 18),   # Good Friday
+    datetime.date(2025, 5, 1),    # Maharashtra Day
+    datetime.date(2025, 6, 7),    # Bakri Id
+    datetime.date(2025, 8, 15),   # Independence Day
+    datetime.date(2025, 8, 16),   # Janmashtami
+    datetime.date(2025, 10, 2),   # Mahatma Gandhi Jayanti
+    datetime.date(2025, 10, 21),  # Diwali (Laxmi Pujan)
+    datetime.date(2025, 10, 22),  # Diwali (Balipratipada)
+    datetime.date(2025, 11, 5),   # Guru Nanak Jayanti
+    datetime.date(2025, 12, 25),  # Christmas
+    # 2026
+    datetime.date(2026, 1, 26),   # Republic Day
+    datetime.date(2026, 2, 17),   # Mahashivratri
+    datetime.date(2026, 3, 3),    # Holi
+    datetime.date(2026, 3, 20),   # Id-Ul-Fitr
+    datetime.date(2026, 3, 30),   # Ugadi
+    datetime.date(2026, 4, 3),    # Good Friday
+    datetime.date(2026, 4, 14),   # Dr. Ambedkar Jayanti
+    datetime.date(2026, 5, 1),    # Maharashtra Day
+    datetime.date(2026, 5, 25),   # Buddha Purnima
+    datetime.date(2026, 6, 26),   # Eid ul-Adha
+    datetime.date(2026, 7, 17),   # Muharram
+    datetime.date(2026, 8, 15),   # Independence Day
+    datetime.date(2026, 8, 25),   # Janmashtami
+    datetime.date(2026, 10, 2),   # Mahatma Gandhi Jayanti
+    datetime.date(2026, 10, 9),   # Dussehra
+    datetime.date(2026, 10, 29),  # Diwali (Laxmi Pujan)
+    datetime.date(2026, 10, 30),  # Diwali (Balipratipada)
+    datetime.date(2026, 11, 25),  # Guru Nanak Jayanti
+    datetime.date(2026, 12, 25),  # Christmas
+}
+
+
+def _market_open() -> bool:
+    """Return True if NSE is currently in its regular trading session.
+
+    NSE hours: Mon-Fri, 9:15 AM - 3:30 PM IST (UTC+5:30).
+    Returns False on weekends, NSE holidays, and outside trading hours.
+    """
+    now = datetime.datetime.now(_IST)
+    # Weekend check
+    if now.weekday() >= 5:  # Saturday=5, Sunday=6
+        return False
+    # Holiday check
+    if now.date() in _NSE_HOLIDAYS:
+        return False
+    # Time check: 9:15 to 15:30 IST
+    market_open = datetime.time(9, 15)
+    market_close = datetime.time(15, 30)
+    return market_open <= now.time() <= market_close
+
+
+
+def _get_ttl() -> int:
+    """Bundle cache TTL: short during market hours, long off-hours."""
+    return _TTL_MARKET if _market_open() else _TTL_OFFHOURS
+
+
+def _get_quote_ttl() -> int:
+    """Quote cache TTL: very short during market hours, moderate off-hours."""
+    return _QUOTE_TTL_MARKET if _market_open() else _QUOTE_TTL_OFFHOURS
 
 
 def _nse(symbol: str) -> str:
@@ -418,7 +495,7 @@ def _live_quote(symbol: str) -> dict:
 def _cached_live_quote(symbol: str) -> dict:
     key = _base(symbol)
     now = time.time()
-    if key in _QUOTE_CACHE and now - _QUOTE_CACHE[key][0] < _QUOTE_TTL:
+    if key in _QUOTE_CACHE and now - _QUOTE_CACHE[key][0] < _get_quote_ttl():
         return _QUOTE_CACHE[key][1]
     q = _live_quote(symbol)
     _QUOTE_CACHE[key] = (now, q)
@@ -431,7 +508,8 @@ def _cached_live_quote(symbol: str) -> dict:
 def bundle(symbol: str) -> dict:
     key = _base(symbol)
     now = time.time()
-    if key in _CACHE and now - _CACHE[key][0] < _TTL:
+    ttl = _get_ttl()
+    if key in _CACHE and now - _CACHE[key][0] < ttl:
         return _CACHE[key][1]
     try:
         b = _live_bundle(symbol)

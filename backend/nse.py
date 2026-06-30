@@ -23,9 +23,17 @@ HEADERS = {
 
 _SESSION = None
 _CACHE: dict = {}
-_TTL = 300
+_TTL_MARKET = 300      # 5 min during market hours
+_TTL_OFFHOURS = 86400  # 24 hours outside market hours
 _DOWN_UNTIL = 0.0          # circuit-breaker: skip NSE until this time after a failure
 _COOLDOWN = 300
+
+def _get_ttl() -> int:
+    try:
+        from market import _market_open
+        return _TTL_MARKET if _market_open() else _TTL_OFFHOURS
+    except Exception:
+        return _TTL_MARKET
 
 
 def _f(v):
@@ -57,7 +65,7 @@ def symbol_data(ticker: str) -> dict:
     now = time.time()
     if now < _DOWN_UNTIL:                       # NSE recently failed — don't hang on it
         return {}
-    if key in _CACHE and now - _CACHE[key][0] < _TTL:
+    if key in _CACHE and now - _CACHE[key][0] < _get_ttl():
         return _CACHE[key][1]
 
     out = {}
