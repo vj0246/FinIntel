@@ -20,15 +20,14 @@ import re
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
-from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
+import groq_pool
 
 import market
 import docstore
 import guardrails as gr
 
-# Load backend/.env so GROQ_API_KEY is present before the Groq client is built
-# (a no-op in prod, where Render injects the vars directly).
+# Load backend/.env so LangSmith vars are present (GROQ keys are loaded by groq_pool).
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # The active chat thread for the in-flight request. The document Q&A tool reads
@@ -37,12 +36,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 # holder is sufficient; set at the top of run_chat().
 _ACTIVE = {"thread": None}
 
-# Groq-hosted model. Upgraded from llama-3.3-70b to the 120B gpt-oss for stronger
-# reasoning and tool selection — still uses your existing GROQ_API_KEY (free/fast),
-# confirmed available on this account. To revert/swap, change this one line
-# (fallbacks: "llama-3.3-70b-versatile", "qwen/qwen3-32b").
+# Groq-hosted model with automatic key rotation.
+# Set GROQ_API_KEY=key1,key2,key3 for failover across multiple keys.
 MODEL = "openai/gpt-oss-120b"
-_llm = ChatGroq(model=MODEL, temperature=0.3, api_key=os.environ.get("GROQ_API_KEY", ""))
+_llm = groq_pool.create_llm(MODEL, temperature=0.3)
 _history: dict = {}
 
 
@@ -349,6 +346,49 @@ def _short(t, n=220):
     t = str(t); return t if len(t) <= n else t[:n] + "…"
 
 
+# --------------------------------------------------------------------------- #
+# Self-correction (reflection) loop
+#
+# After the ReAct agent drafts its final answer, a critic pass checks it
+# against the actual tool evidence (grounding, correctness, completeness,
+# compliance). If the critic flags issues, ONE revision call fixes them.
+# Costs 1-2 extra LLM calls per answer; disable with SELF_REFLECT=0.
+# --------------------------------------------------------------------------- #
+REFLECT_ENABLED = os.environ.get("SELF_REFLECT", "1") != "0"
+_MIN_REFLECT_LEN = 240   # short general-knowledge answers skip reflection
+
+
+def _reflect_and_correct(question: str, answer: str, evidence: list) -> str:
+    """Critic -> (optional) revise. Returns the best available answer."""
+    ev = "\n\n".join(f"[{name}] {res}" for name, res in evidence) or "none (general knowledge answer)"
+    try:
+        raw = _llm.invoke([HumanMessage(content=(
+            "You are a strict REVIEWER of a financial assistant's draft answer.\n"
+            "Check the draft against the tool evidence:\n"
+            "1. GROUNDING — every number/fact in the draft appears in the evidence "
+            "(general finance knowledge needs no evidence).\n"
+            "2. CORRECTNESS — no misread figures, wrong units (₹ vs $), or wrong ticker.\n"
+            "3. COMPLETENESS — the user's question is actually answered.\n"
+            "4. COMPLIANCE — no guaranteed-return promises or directive personal advice "
+            "('you should buy'); analytic verdicts (BUY/HOLD/SELL as opinion) are fine.\n"
+            'Reply ONLY as compact JSON: {"verdict":"PASS" or "REVISE", "issues":"specific problems, or empty"}\n\n'
+            f"QUESTION:\n{question}\n\nTOOL EVIDENCE:\n{ev[:8000]}\n\nDRAFT ANSWER:\n{answer}"
+        ))]).content
+        obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+        if obj.get("verdict", "PASS").upper() != "REVISE" or not obj.get("issues"):
+            return answer
+        revised = _llm.invoke([HumanMessage(content=(
+            "Revise the draft answer to fix ONLY these reviewer issues, using ONLY the tool "
+            f"evidence — never invent numbers:\n{obj['issues']}\n\n"
+            "Keep the same short, precise style (₹ for NSE money, lead with the number/verdict, "
+            "no disclaimers). Reply with ONLY the corrected answer.\n\n"
+            f"QUESTION:\n{question}\n\nTOOL EVIDENCE:\n{ev[:8000]}\n\nDRAFT ANSWER:\n{answer}"
+        ))]).content
+        return revised.strip() if revised and revised.strip() else answer
+    except Exception:
+        return answer   # reflection must never break the answer path
+
+
 async def run_chat(ticker: str, question: str, thread_id: str):
     _ACTIVE["thread"] = thread_id           # so ask_document finds this chat's upload
     history = _history.get(thread_id, [])
@@ -362,6 +402,7 @@ async def run_chat(ticker: str, question: str, thread_id: str):
         f"{doc_note}\n{question}"))
     messages = history + [user_msg]
     final_answer = ""
+    evidence = []   # (tool_name, result) pairs — the reviewer checks the draft against these
     _start = asyncio.get_event_loop().time()
     _TIMEOUT = 120  # seconds — hard cap on total agent execution time
     try:
@@ -377,9 +418,10 @@ async def run_chat(ticker: str, question: str, thread_id: str):
                         for tc in (msg.tool_calls or []):
                             yield {"type": "tool_call", "name": tc["name"], "args": tc["args"]}
                         if not msg.tool_calls and msg.content:
-                            final_answer = gr.sanitise_output(msg.content)
-                            yield {"type": "answer", "text": final_answer}
+                            # buffer the draft — reflection + compliance run after the loop
+                            final_answer = msg.content
                     elif isinstance(msg, ToolMessage):
+                        evidence.append((msg.name, str(msg.content)[:1500]))
                         if msg.name == "get_price_chart":
                             try:
                                 meta = json.loads(msg.content); b = market.bundle(meta["ticker"])
@@ -397,4 +439,14 @@ async def run_chat(ticker: str, question: str, thread_id: str):
             yield {"type": "error", "text": msg}
         return
 
+    # Self-correction: critic reviews the draft against tool evidence, revises once if needed
+    if REFLECT_ENABLED and final_answer and (evidence or len(final_answer) >= _MIN_REFLECT_LEN):
+        yield {"type": "tool_call", "name": "self_review", "args": {}}
+        final_answer = _reflect_and_correct(question, final_answer, evidence)
+
     _history[thread_id] = (messages + [AIMessage(content=final_answer)])[-8:]
+
+    # Compliance guardrail: forbidden phrases -> semantic screen -> disclaimer
+    if final_answer:
+        yield {"type": "tool_call", "name": "compliance_check", "args": {}}
+        yield {"type": "answer", "text": gr.enforce_compliance(final_answer)}

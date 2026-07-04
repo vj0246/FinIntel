@@ -150,9 +150,11 @@ async def chat(ticker: str, q: str, thread: str):
     async def stream():
         try:
             async for ev in run_chat(t, question, tid):
-                # Sanitise LLM output
+                # Belt-and-braces: chat_agent already ran the compliance pipeline on the
+                # final answer; re-screen here so error/fallback answers are covered too,
+                # and the mandatory disclaimer survives any truncation.
                 if ev.get("type") == "answer" and ev.get("text"):
-                    ev["text"] = gr.sanitise_output(ev["text"])
+                    ev["text"] = gr.append_disclaimer(gr.sanitise_output(ev["text"]))
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
@@ -199,7 +201,9 @@ async def upload_clear(thread: str):
 
 @app.get("/api/health")
 async def health():
+    import groq_pool
     return {"ok": True, "has_key": bool(os.environ.get("GROQ_API_KEY")),
+            "groq_keys": groq_pool.key_count(),
             "langsmith": bool(os.environ.get("LANGCHAIN_API_KEY"))}
 
 

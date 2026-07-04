@@ -5,14 +5,14 @@ import Markdown from "./Markdown.jsx";
 import { API } from "./api.js";
 
 const PRESETS = [
-  ["Fundamental analysis", "Do a fundamental analysis: financial health, valuation and quality verdict."],
-  ["Technical analysis", "Give a technical read of the price trend and momentum."],
-  ["Why did it move?", "Explain the reason for the recent rise or downfall."],
-  ["Risk assessment", "Assess the key downside risks for this stock right now."],
-  ["Bull vs bear", "Lay out the bull case versus the bear case."],
-  ["News & sentiment", "Summarise the latest news and judge the market sentiment."],
-  ["Quarterly results", "Review the latest quarterly results and what they show."],
-  ["Buy / hold / sell", "Give me a full analysis and a clear buy / hold / sell verdict."],
+  ["📊 Fundamental analysis", "Do a fundamental analysis: financial health, valuation and quality verdict."],
+  ["📈 Technical analysis", "Give a technical read of the price trend and momentum."],
+  ["🔍 Why did it move?", "Explain the reason for the recent rise or downfall."],
+  ["⚠️ Risk assessment", "Assess the key downside risks for this stock right now."],
+  ["🐂 Bull vs bear", "Lay out the bull case versus the bear case."],
+  ["📰 News & sentiment", "Summarise the latest news and judge the market sentiment."],
+  ["📋 Quarterly results", "Review the latest quarterly results and what they show."],
+  ["✅ Buy / hold / sell", "Give me a full analysis and a clear buy / hold / sell verdict."],
 ];
 
 const TOOL_LABEL = {
@@ -26,6 +26,13 @@ const TOOL_LABEL = {
   news_headlines: "News headlines", news_summary: "News summary",
   analyst_ratings: "Analyst ratings", risk_assessment: "Risk assessment",
   bull_bear_case: "Bull vs bear", verdict: "Verdict", finish: "Finalise",
+};
+
+const PHASE_BADGE = {
+  idle: null,
+  working: { label: "Working", color: "#0d9488" },
+  awaiting: { label: "Awaiting approval", color: "#b45309" },
+  done: { label: "Complete", color: "#16a34a" },
 };
 
 export default function Analyst() {
@@ -72,6 +79,7 @@ export default function Analyst() {
   }
 
   const running = phase === "working";
+  const badge = PHASE_BADGE[phase];
 
   return (
     <div className="desk">
@@ -83,6 +91,15 @@ export default function Analyst() {
         <div className="row1">
           <span className="nse">NSE</span>
           <TickerSearch value={ticker} onChange={setTicker} disabled={running} placeholder="Search a company or NSE symbol (e.g. TCS)" />
+          {badge && (
+            <span style={{
+              fontFamily: "var(--mono)", fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em",
+              textTransform: "uppercase", color: badge.color, background: `${badge.color}12`,
+              border: `1px solid ${badge.color}25`, borderRadius: "6px", padding: "4px 8px",
+              animation: phase === "working" ? "pulse-dot 2s ease-in-out infinite" : "none",
+              flexShrink: 0,
+            }}>{badge.label}</span>
+          )}
         </div>
         <div className="presets">
           {PRESETS.map(([label, t]) => (
@@ -91,7 +108,9 @@ export default function Analyst() {
         </div>
         <div className="row2">
           <input className="task-input" value={task} onChange={(e) => setTask(e.target.value)} onKeyDown={(e) => e.key === "Enter" && start()} placeholder="…or type your own task" disabled={running} />
-          <button className="run" onClick={start} disabled={running || !ticker.trim() || !task.trim()}>Start</button>
+          <button className="run" onClick={start} disabled={running || !ticker.trim() || !task.trim()}>
+            {running ? "Working…" : "▶ Start"}
+          </button>
         </div>
       </div>
 
@@ -122,13 +141,13 @@ export default function Analyst() {
           <div className="gate-tag">{pending.tool === "finish" ? "⏸ Ready to finalise" : "⏸ Next step — your call"}</div>
           <div className="gate-action"><span>Proposed step · {TOOL_LABEL[pending.tool] || pending.tool}</span>{pending.summary}</div>
           <div className="gate-btns">
-            <button className="approve" onClick={() => decide("approve")}>{pending.tool === "finish" ? "Approve & get report" : "Approve"}</button>
-            <button className="reject" onClick={() => decide("stop")}>Stop & summarise</button>
+            <button className="approve" onClick={() => decide("approve")}>{pending.tool === "finish" ? "✓ Approve & get report" : "✓ Approve"}</button>
+            <button className="reject" onClick={() => decide("stop")}>✕ Stop & summarise</button>
           </div>
           {pending.tool !== "finish" && (
             <div className="revise">
               <input value={redirect} onChange={(e) => setRedirect(e.target.value)} placeholder="…or redirect (e.g. 'check fundamentals instead')" />
-              <button onClick={() => redirect.trim() && (decide("redirect:" + redirect.trim()), setRedirect(""))} disabled={!redirect.trim()}>Redirect</button>
+              <button onClick={() => redirect.trim() && (decide("redirect:" + redirect.trim()), setRedirect(""))} disabled={!redirect.trim()}>↩ Redirect</button>
             </div>
           )}
         </div>

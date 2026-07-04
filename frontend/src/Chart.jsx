@@ -1,4 +1,4 @@
-import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
 
 const fmtINR = (v) => "₹" + Number(v).toLocaleString("en-IN", { maximumFractionDigits: v < 100 ? 2 : 0 });
 
@@ -6,6 +6,7 @@ export default function Chart({ series, ticker, changePct }) {
   if (!series || series.length === 0) return null;
   const up = (changePct ?? 0) >= 0;
   const color = up ? "#16a34a" : "#dc2626";
+  const gradientId = `grad-${ticker || "chart"}`;
 
   const hasDates = series.some((p) => p.date);
   const data = series.map((p, i) => ({ x: p.date || i, close: p.close }))
@@ -33,12 +34,20 @@ export default function Chart({ series, ticker, changePct }) {
     <div className="chart">
       <div className="chart-head">
         <span className="chart-ticker">{ticker}</span>
-        <span className="chart-change" style={{ color }}>
-          {up ? "▲" : "▼"} {Math.abs(changePct ?? 0).toFixed(2)}% · 6mo
+        <span className="chart-meta">
+          <span className="chart-change" style={{ color }}>
+            {up ? "▲" : "▼"} {Math.abs(changePct ?? 0).toFixed(2)}% · 6mo
+          </span>
         </span>
       </div>
-      <ResponsiveContainer width="100%" height={172}>
-        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 2, left: 4 }}>
+      <ResponsiveContainer width="100%" height={180}>
+        <AreaChart data={data} margin={{ top: 8, right: 12, bottom: 2, left: 4 }}>
+          <defs>
+            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.15} />
+              <stop offset="95%" stopColor={color} stopOpacity={0.01} />
+            </linearGradient>
+          </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#eef2f6" vertical={false} />
           <XAxis
             dataKey="x"
@@ -60,14 +69,30 @@ export default function Chart({ series, ticker, changePct }) {
             tickLine={false}
           />
           <Tooltip
-            contentStyle={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: 12, boxShadow: "0 4px 16px rgba(15,23,42,0.07)" }}
-            labelStyle={{ color: "#475569", marginBottom: 2 }}
-            itemStyle={{ color }}
+            contentStyle={{
+              background: "#ffffff",
+              border: "1px solid #e2e8f0",
+              borderRadius: 10,
+              fontSize: 12,
+              boxShadow: "0 8px 30px rgba(15,23,42,0.08)",
+              padding: "8px 12px",
+            }}
+            labelStyle={{ color: "#475569", marginBottom: 2, fontWeight: 500 }}
+            itemStyle={{ color, fontWeight: 600 }}
             labelFormatter={hasDates ? fmtFull : undefined}
             formatter={(val) => [fmtINR(val), "Close"]}
+            cursor={{ stroke: color, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
-          <Line type="monotone" dataKey="close" stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-        </LineChart>
+          <Area
+            type="monotone"
+            dataKey="close"
+            stroke={color}
+            strokeWidth={2.5}
+            fill={`url(#${gradientId})`}
+            dot={false}
+            activeDot={{ r: 5, strokeWidth: 2, stroke: "#fff", fill: color }}
+          />
+        </AreaChart>
       </ResponsiveContainer>
     </div>
   );

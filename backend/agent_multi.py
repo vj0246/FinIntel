@@ -29,19 +29,17 @@ from typing import TypedDict, Optional
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
-from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, START, END
+import groq_pool
 
 import market
 import guardrails as gr
 
-# Load backend/.env so GROQ_API_KEY (and optional LangSmith vars) are present before
-# the Groq client is built below. In prod (Render) the vars are set in the real
-# environment and the missing .env is a harmless no-op.
+# Load backend/.env so LangSmith vars are present (GROQ keys are loaded by groq_pool).
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 MODEL = "llama-3.3-70b-versatile"
-_llm = ChatGroq(model=MODEL, temperature=0.3, api_key=os.environ.get("GROQ_API_KEY", ""))
+_llm = groq_pool.create_llm(MODEL, temperature=0.3)
 
 # Stores proposals waiting for human sign-off  {thread_id: {recommendation, action, state}}
 _pending: dict = {}
@@ -58,6 +56,7 @@ class DeskState(TypedDict):
     recommendation: Optional[str]
     action: Optional[str]
     feedback: Optional[str]
+    reflection: Optional[str]   # note from the self-correction pass (for the event stream)
 
 
 def _ask(role: str, content: str) -> str:
@@ -106,6 +105,34 @@ def synthesize(state: DeskState):
     return {"recommendation": rec, "action": obj.get("action", "Flag for analyst review"), "feedback": None}
 
 
+def reflect(state: DeskState):
+    """Self-correction pass: a critic reviews the draft verdict against the
+    research and risk notes; if it flags issues, ONE revision fixes them.
+    Costs 1-2 extra LLM calls per run; disable with SELF_REFLECT=0."""
+    if os.environ.get("SELF_REFLECT", "1") == "0":
+        return {"reflection": "Self-check skipped (disabled)."}
+    try:
+        raw = _ask(
+            "You are a strict REVIEWER. Check the draft verdict below:\n"
+            "1. Is the verdict consistent with the research and the stated risk?\n"
+            "2. Is the thesis grounded in those notes (no invented facts)?\n"
+            "3. Is it compliant — no guaranteed-return promises or directive personal advice "
+            "('you should buy'); an analytic BUY/HOLD/SELL opinion is fine?\n"
+            "4. Is the proposed action concrete?\n"
+            'Reply ONLY as JSON: {"verdict":"PASS" or "REVISE", "issues":"specific problems, or empty"}',
+            f"RESEARCH:\n{state['research']}\n\nRISK:\n{state['risk']}\n\n"
+            f"DRAFT:\n{state['recommendation']}\nProposed action: {state['action']}",
+        )
+        obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+        if obj.get("verdict", "PASS").upper() != "REVISE" or not obj.get("issues"):
+            return {"reflection": "Self-check passed — verdict is consistent, grounded and compliant."}
+        # One corrective synthesis pass with the reviewer's issues as feedback
+        fixed = synthesize({**state, "feedback": f"Reviewer issues to fix: {obj['issues']}"})
+        return {**fixed, "reflection": f"Self-check flagged issues and revised the draft: {obj['issues']}"}
+    except Exception:
+        return {"reflection": "Self-check unavailable — keeping the draft."}
+
+
 # --------------------------------------------------------------------------- #
 # Graph — runs through synthesize then ends. HITL handled outside the graph.
 # --------------------------------------------------------------------------- #
@@ -115,11 +142,13 @@ def _build():
     g.add_node("researcher", researcher)
     g.add_node("risk_check", risk_check)
     g.add_node("synthesize", synthesize)
+    g.add_node("reflect", reflect)
     g.add_edge(START, "gather")
     g.add_edge("gather", "researcher")
     g.add_edge("researcher", "risk_check")
     g.add_edge("risk_check", "synthesize")
-    g.add_edge("synthesize", END)
+    g.add_edge("synthesize", "reflect")
+    g.add_edge("reflect", END)
     return g.compile()
 
 
@@ -140,6 +169,11 @@ def _events_from_update(update: dict):
         elif node == "synthesize":
             yield {"type": "agent", "name": "Synthesiser",
                    "text": f"Draft: {delta.get('recommendation', '')}\nProposed action: {delta.get('action', '')}"}
+        elif node == "reflect":
+            text = delta.get("reflection", "")
+            if delta.get("recommendation"):    # the self-check revised the draft
+                text += f"\nRevised: {delta['recommendation']}\nProposed action: {delta.get('action', '')}"
+            yield {"type": "agent", "name": "Reflection", "text": text}
 
 
 # --------------------------------------------------------------------------- #
@@ -158,12 +192,14 @@ async def start_run(ticker: str, thread_id: str):
             return
         for ev in _events_from_update(update):
             yield ev
-        for node in ("gather", "researcher", "risk_check", "synthesize"):
+        for node in ("gather", "researcher", "risk_check", "synthesize", "reflect"):
             if node in update:
                 collected.update({k: v for k, v in update[node].items() if v is not None})
 
-    # Sanitise the synthesised recommendation
-    collected["recommendation"] = gr.sanitise_output(collected.get("recommendation", ""))
+    # Compliance screen on the recommendation (regex layer; the reflect node already
+    # did the semantic pass). Disclaimer goes on the FINAL outcome, not the draft card.
+    collected["recommendation"] = gr.enforce_compliance(
+        collected.get("recommendation", ""), semantic=False, disclaimer=False)
     _pending[thread_id] = collected
 
     yield {
@@ -182,7 +218,7 @@ async def resume_run(thread_id: str, decision: str):
 
     if decision == "approve":
         yield {"type": "final",
-               "text": f"APPROVED AND EXECUTED\n\nAction taken: {action}\n\n{rec}"}
+               "text": gr.append_disclaimer(f"APPROVED AND EXECUTED\n\nAction taken: {action}\n\n{rec}")}
 
     elif decision == "reject":
         yield {"type": "final",
@@ -200,13 +236,17 @@ async def resume_run(thread_id: str, decision: str):
             "feedback": feedback,
             "recommendation": None,
             "action": None,
+            "reflection": None,
         }
         async for update in GRAPH.astream(revise_state, stream_mode="updates"):
             for ev in _events_from_update(update):
                 yield ev
-            if "synthesize" in update:
-                revised["recommendation"] = update["synthesize"].get("recommendation", "")
-                revised["action"] = update["synthesize"].get("action", "")
+            for node in ("synthesize", "reflect"):   # reflect may revise the draft again
+                if node in update and update[node].get("recommendation"):
+                    revised["recommendation"] = update[node]["recommendation"]
+                    revised["action"] = update[node].get("action", "")
+        revised["recommendation"] = gr.enforce_compliance(
+            revised["recommendation"], semantic=False, disclaimer=False)
         # store updated pending (keep prev data/research/risk for further revisions)
         _pending[thread_id] = {**pending, **revised}
         yield {

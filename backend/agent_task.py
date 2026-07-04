@@ -23,21 +23,18 @@ import os
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
-from langchain_groq import ChatGroq
+import groq_pool
 
 import market
 import guardrails as gr
 
-# Load backend/.env so GROQ_API_KEY is present before the Groq client is built
-# (a no-op in prod, where Render injects the vars directly).
+# Load backend/.env so LangSmith vars are present (GROQ keys are loaded by groq_pool).
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-# Groq-hosted model. Upgraded from llama-3.3-70b to the 120B gpt-oss for stronger
-# reasoning and tighter tool-step planning — still uses your existing GROQ_API_KEY
-# (free/fast), confirmed available on this account. To revert/swap, change this one
-# line (fallbacks: "llama-3.3-70b-versatile", "qwen/qwen3-32b").
+# Groq-hosted model with automatic key rotation.
+# Set GROQ_API_KEY=key1,key2,key3 for failover across multiple keys.
 MODEL = "openai/gpt-oss-120b"
-_llm = ChatGroq(model=MODEL, temperature=0.3, api_key=os.environ.get("GROQ_API_KEY", ""))
+_llm = groq_pool.create_llm(MODEL, temperature=0.3)
 
 _sessions: dict = {}   # thread_id -> session dict
 
@@ -428,7 +425,41 @@ def _report(sess: dict) -> str:
         "If some data was missing, say so briefly. Be concise; do NOT add any "
         "'informational only / not investment advice' disclaimer."
     ))]).content
-    return out
+    out = _reflect_report(sess, ctx, out)
+    # Compliance guardrail: forbidden phrases -> semantic screen -> PII -> disclaimer
+    return gr.enforce_compliance(out)
+
+
+def _reflect_report(sess: dict, ctx: str, draft: str) -> str:
+    """Self-correction: a critic checks the report against the gathered findings;
+    one revision pass if it flags issues. Disable with SELF_REFLECT=0."""
+    if os.environ.get("SELF_REFLECT", "1") == "0" or not draft:
+        return draft
+    try:
+        raw = _llm.invoke([HumanMessage(content=(
+            "You are a strict REVIEWER of an equity analyst's draft report.\n"
+            "Check the draft against the findings:\n"
+            "1. GROUNDING — every number/fact appears in the findings; nothing invented.\n"
+            "2. COMPLETENESS — the task is actually answered.\n"
+            "3. CORRECTNESS — units are right (₹, crore), no misread figures.\n"
+            "4. COMPLIANCE — no guaranteed-return promises or directive personal advice; "
+            "an analytic BUY/HOLD/SELL opinion is fine.\n"
+            'Reply ONLY as JSON: {"verdict":"PASS" or "REVISE", "issues":"specific problems, or empty"}\n\n'
+            f"TASK: {sess['task']}\nSTOCK: {sess['ticker']} (NSE)\n\n"
+            f"FINDINGS:\n{ctx[:8000]}\n\nDRAFT REPORT:\n{draft}"
+        ))]).content
+        obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+        if obj.get("verdict", "PASS").upper() != "REVISE" or not obj.get("issues"):
+            return draft
+        revised = _llm.invoke([HumanMessage(content=(
+            "Revise the draft report to fix ONLY these reviewer issues, using ONLY the "
+            f"findings — never invent numbers:\n{obj['issues']}\n\n"
+            "Keep it concise and keep the same format. Reply with ONLY the corrected report.\n\n"
+            f"TASK: {sess['task']}\n\nFINDINGS:\n{ctx[:8000]}\n\nDRAFT REPORT:\n{draft}"
+        ))]).content
+        return revised.strip() if revised and revised.strip() else draft
+    except Exception:
+        return draft   # reflection must never break the report path
 
 
 # --------------------------------------------------------------------------- #
@@ -463,7 +494,7 @@ async def step_task(thread_id: str, decision: str):
     if decision.startswith("redirect:"):
         sess["redirects"] = sess.get("redirects", 0) + 1
         if sess["redirects"] > MAX_REDIRECTS:
-            yield {"type": "final", "text": gr.sanitise_output(_report(sess))}
+            yield {"type": "final", "text": _report(sess)}
             _sessions.pop(thread_id, None)
             return
         prop = _propose(sess, redirect=decision[len("redirect:"):].strip())
@@ -473,14 +504,14 @@ async def step_task(thread_id: str, decision: str):
 
     # Stop: finalise now
     if decision == "stop":
-        yield {"type": "final", "text": gr.sanitise_output(_report(sess))}
+        yield {"type": "final", "text": _report(sess)}
         _sessions.pop(thread_id, None)
         return
 
     # Approve the pending step
     prop = sess["pending"]
     if not prop or prop["tool"] == "finish":
-        yield {"type": "final", "text": gr.sanitise_output(_report(sess))}
+        yield {"type": "final", "text": _report(sess)}
         _sessions.pop(thread_id, None)
         return
 

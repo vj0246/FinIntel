@@ -8,6 +8,7 @@ const ROLE = {
   Researcher: "var(--think)",
   Risk: "var(--signal)",
   Synthesiser: "var(--indigo)",
+  Reflection: "var(--think)",
   Desk: "var(--buy)",
 };
 

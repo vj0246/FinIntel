@@ -12,23 +12,25 @@ export default function App() {
     <div className="shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">▦</span>
+          <span className="brand-mark" aria-hidden="true">▦</span>
           <span className="brand-name">Agentic Equity Desk</span>
         </div>
         <div className="topbar-sub">Multi-step agent · human-in-the-loop · NSE</div>
       </header>
 
       {/* Mobile tab switcher — hidden on desktop via CSS */}
-      <nav className="mobile-tabs">
+      <nav className="mobile-tabs" aria-label="Panel switcher">
         <button
           className={mobileTab === "analyst" ? "active" : ""}
           onClick={() => setMobileTab("analyst")}
+          aria-selected={mobileTab === "analyst"}
         >
           📊 Analyst
         </button>
         <button
           className={mobileTab === "chat" ? "active" : ""}
           onClick={() => setMobileTab("chat")}
+          aria-selected={mobileTab === "chat"}
         >
           💬 Chat
         </button>

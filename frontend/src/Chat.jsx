@@ -4,8 +4,18 @@ import TickerSearch from "./TickerSearch.jsx";
 import Markdown from "./Markdown.jsx";
 import { API } from "./api.js";
 
-const SUGGEST = ["Compare this stock's quarterly results with its top competitors", "Show the balance sheet & shareholders' equity", "Why did it move recently? (with chart)", "Explain P/E vs P/B in simple terms", "Buy, hold or sell?"];
-const DOC_SUGGEST = ["Summarise the uploaded document", "What's the net profit & revenue?", "Key risks mentioned in the document"];
+const SUGGEST = [
+  "Compare this stock's quarterly results with its top competitors",
+  "Show the balance sheet & shareholders' equity",
+  "Why did it move recently? (with chart)",
+  "Explain P/E vs P/B in simple terms",
+  "Buy, hold or sell?",
+];
+const DOC_SUGGEST = [
+  "Summarise the uploaded document",
+  "What's the net profit & revenue?",
+  "Key risks mentioned in the document",
+];
 
 const TOOL_LABEL = {
   get_quote: "Quote", get_price_chart: "Chart", get_fundamentals: "Fundamentals",
@@ -19,6 +29,7 @@ const TOOL_LABEL = {
   get_balance_sheet: "Balance sheet", get_competitors: "Competitors",
   compare_quarterly: "Compare quarters",
   ask_document: "Document Q&A", deep_desk_analysis: "Desk analysis",
+  self_review: "✓ Self-review", compliance_check: "🛡 Compliance check",
 };
 
 export default function Chat() {
@@ -55,7 +66,7 @@ export default function Chat() {
       if (!r.ok) throw new Error(d.detail || "Upload failed");
       setDoc({ name: d.name, chars: d.chars });
       setMsgs((m) => [...m, { role: "assistant", steps: [], chart: null,
-        answer: `📄 Attached “${d.name}” (${d.chars.toLocaleString()} characters extracted). Ask me anything about it.`, loading: false }]);
+        answer: `📄 Attached "${d.name}" (${d.chars.toLocaleString()} characters extracted). Ask me anything about it.`, loading: false }]);
     } catch (err) {
       setMsgs((m) => [...m, { role: "assistant", steps: [], chart: null, answer: "⚠ " + err.message, loading: false }]);
     } finally {
@@ -102,10 +113,10 @@ export default function Chat() {
     <div className="chat">
       <div className="chat-top">
         <div className="chat-title-row">
-          <div className="chat-title">Financial assistant</div>
-          <button className="chat-refresh" onClick={reset} disabled={busy} title="Clear chat & start fresh" aria-label="Clear chat">↻ New</button>
+          <div className="chat-title">💬 Financial Assistant</div>
+          <button className="chat-refresh" onClick={reset} disabled={busy} title="Clear chat & start fresh" aria-label="Clear chat">↻ New chat</button>
         </div>
-        <div className="chat-sub">Ask about NSE stocks, compare competitors, query an uploaded document, or any general finance question. It picks its own tools and answers instantly — no step-by-step approvals.</div>
+        <div className="chat-sub">Ask about NSE stocks, compare competitors, query an uploaded document, or any general finance question. It picks its own tools and answers instantly.</div>
         <div className="chat-ticker-row">
           <span className="nse">NSE</span>
           <TickerSearch value={ticker} onChange={setTicker} placeholder="Search company or symbol" />
@@ -160,7 +171,7 @@ export default function Chat() {
           placeholder={ticker ? `Ask about ${ticker}…` : "Ask about a stock or anything financial…"}
           disabled={busy}
         />
-        <button onClick={() => ask()} disabled={busy || !input.trim()}>Send</button>
+        <button onClick={() => ask()} disabled={busy || !input.trim()}>Send ↗</button>
       </div>
     </div>
   );
