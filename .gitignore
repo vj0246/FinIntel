@@ -6,3 +6,4 @@ __pycache__/
 .env
 *.pyc
 .DS_Store
+backend/verdict_log.json

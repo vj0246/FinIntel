@@ -163,6 +163,71 @@ async def chat(ticker: str, q: str, thread: str):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.post("/api/portfolio")
+async def portfolio_upload(thread: str = Form(...), file: UploadFile = File(None),
+                           text: str = Form(None)):
+    """Load holdings for a thread — broker CSV upload or pasted lines."""
+    import portfolio
+    tid = gr.validate_uuid(thread)
+    if file is not None and file.filename:
+        raw = await file.read()
+        if len(raw) > 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File too large (max 1 MB).")
+        content = raw.decode("utf-8", errors="replace")
+    elif text:
+        content = gr.validate_text(text, max_len=8000, field_name="Holdings")
+    else:
+        raise HTTPException(status_code=422, detail="Provide a CSV file or pasted holdings.")
+
+    holdings, warnings = portfolio.parse_holdings(content)
+    if not holdings:
+        raise HTTPException(status_code=422,
+                            detail="No valid holdings found. Format: TICKER, qty, avg cost — one per line.")
+    portfolio.set_holdings(tid, holdings)
+    return {"ok": True, "holdings": holdings, "warnings": warnings}
+
+
+@app.get("/api/portfolio/analyze")
+async def portfolio_analyze(thread: str):
+    import portfolio
+    tid = gr.validate_uuid(thread)
+
+    async def stream():
+        try:
+            async for ev in portfolio.analyze(tid):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/portfolio/resume")
+async def portfolio_resume(thread: str, decision: str):
+    import portfolio
+    tid = gr.validate_uuid(thread)
+    d = gr.validate_text(decision, max_len=500, field_name="Decision")
+
+    async def stream():
+        try:
+            async for ev in portfolio.resume(tid, d):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/track-record")
+async def track_record_api():
+    """The desk's own scorecard: every logged verdict re-checked at current prices."""
+    import verdict_log
+    import asyncio as _aio
+    return await _aio.to_thread(verdict_log.track_record)
+
+
 @app.get("/api/symbols")
 async def symbols(q: str = ""):
     """Autocomplete for the search bar: company names + NSE tickers."""

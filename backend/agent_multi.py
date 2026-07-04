@@ -217,6 +217,14 @@ async def resume_run(thread_id: str, decision: str):
     action = pending.get("action", "Unknown")
 
     if decision == "approve":
+        # Track record: log the approved call at today's price so it can be scored later
+        try:
+            import verdict_log
+            price = ((pending.get("data") or {}).get("price") or {}).get("end")
+            verdict_log.log_verdict(pending.get("ticker", ""),
+                                    verdict_log.extract_verdict(rec), price, source="desk")
+        except Exception:
+            pass
         yield {"type": "final",
                "text": gr.append_disclaimer(f"APPROVED AND EXECUTED\n\nAction taken: {action}\n\n{rec}")}
 

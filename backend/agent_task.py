@@ -519,6 +519,14 @@ async def step_task(thread_id: str, decision: str):
     # Regex compliance screen on each step; the disclaimer goes on the final report only
     result = gr.enforce_compliance(result, semantic=False, disclaimer=False)
     sess["context"].append({"tool": prop["tool"], "result": result})
+    if prop["tool"] == "verdict":
+        # Track record: log the stance at today's price so it can be scored later
+        try:
+            import verdict_log
+            verdict_log.log_verdict(sess["ticker"], verdict_log.extract_verdict(result),
+                                    market.quote(sess["ticker"]).get("price"), source="task")
+        except Exception:
+            pass
     if chart:
         yield {"type": "chart", **chart}
     yield {"type": "step_result", "tool": prop["tool"], "text": result}
