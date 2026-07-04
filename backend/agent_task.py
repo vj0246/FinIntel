@@ -516,6 +516,8 @@ async def step_task(thread_id: str, decision: str):
         return
 
     result, chart = _execute(prop["tool"], sess["ticker"])
+    # Regex compliance screen on each step; the disclaimer goes on the final report only
+    result = gr.enforce_compliance(result, semantic=False, disclaimer=False)
     sess["context"].append({"tool": prop["tool"], "result": result})
     if chart:
         yield {"type": "chart", **chart}
