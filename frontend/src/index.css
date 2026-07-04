@@ -1896,3 +1896,67 @@ input:focus-visible {
 @media (max-width: 980px) {
   .view-tabs { display: none; }
 }
+
+/* ================================================================== */
+/* WAR ROOM                                                            */
+/* ================================================================== */
+.wr-case {
+  font-size: 13.5px;
+  line-height: 1.55;
+  border: 1px solid var(--line-subtle);
+  border-left: 3px solid var(--c, var(--muted));
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--glass);
+}
+
+.wr-verdict {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 12px;
+  background: var(--glass);
+}
+
+.wr-verdict-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.wr-badge {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 4px 12px;
+  border-radius: 8px;
+  color: #fff;
+}
+
+.wr-buy { background: var(--buy); }
+.wr-sell { background: var(--sell); }
+.wr-hold { background: var(--indigo); }
+
+.wr-conf, .wr-score {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.wr-conf-bar {
+  height: 5px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: var(--line-subtle);
+  overflow: hidden;
+}
+
+.wr-conf-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--indigo), var(--buy));
+  transition: width 0.6s var(--ease);
+}

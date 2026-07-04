@@ -220,6 +220,44 @@ async def portfolio_resume(thread: str, decision: str):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.get("/api/war/start")
+async def war_start(q: str, thread: str, ticker: str = ""):
+    """Research War Room: orchestrated specialists + bull/bear debate + judge."""
+    import war_room
+    question = gr.validate_text(q, max_len=1000, field_name="Question")
+    tid = gr.validate_uuid(thread)
+    t = gr.validate_ticker(ticker) if ticker else ""
+    if gr.check_prompt_injection(question):
+        raise HTTPException(status_code=422, detail="Ask a research question about a stock.")
+
+    async def stream():
+        try:
+            async for ev in war_room.start(question, t, tid):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/war/resume")
+async def war_resume(thread: str, decision: str):
+    import war_room
+    tid = gr.validate_uuid(thread)
+    d = gr.validate_text(decision, max_len=500, field_name="Decision")
+
+    async def stream():
+        try:
+            async for ev in war_room.resume(tid, d):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/api/track-record")
 async def track_record_api():
     """The desk's own scorecard: every logged verdict re-checked at current prices."""

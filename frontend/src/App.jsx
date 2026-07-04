@@ -1,18 +1,19 @@
 import { useState } from "react";
 import Analyst from "./Analyst.jsx";
 import Portfolio from "./Portfolio.jsx";
+import WarRoom from "./WarRoom.jsx";
 import Chat from "./Chat.jsx";
 
 export default function App() {
   // shared ticker: the side chat follows the analyst unless changed independently
   const [ticker, setTicker] = useState("");
   // which panel fills the main area on desktop
-  const [view, setView] = useState("analyst");   // "analyst" | "portfolio"
+  const [view, setView] = useState("analyst");   // "analyst" | "portfolio" | "war"
   // mobile tab state: "analyst" | "portfolio" | "chat"
   const [mobileTab, setMobileTab] = useState("analyst");
 
   const showMain = mobileTab !== "chat";
-  const mainView = mobileTab === "portfolio" ? "portfolio" : view;
+  const mainView = mobileTab === "chat" ? view : mobileTab;
 
   return (
     <div className="shell">
@@ -24,6 +25,7 @@ export default function App() {
         <nav className="view-tabs" aria-label="Main view">
           <button className={mainView === "analyst" ? "active" : ""} onClick={() => { setView("analyst"); setMobileTab("analyst"); }}>📊 Analyst</button>
           <button className={mainView === "portfolio" ? "active" : ""} onClick={() => { setView("portfolio"); setMobileTab("portfolio"); }}>💼 Portfolio</button>
+          <button className={mainView === "war" ? "active" : ""} onClick={() => { setView("war"); setMobileTab("war"); }}>⚔️ War Room</button>
         </nav>
         <div className="topbar-sub">Multi-step agent · human-in-the-loop · NSE</div>
       </header>
@@ -36,6 +38,9 @@ export default function App() {
         <button className={mobileTab === "portfolio" ? "active" : ""} onClick={() => { setMobileTab("portfolio"); setView("portfolio"); }} aria-selected={mobileTab === "portfolio"}>
           💼 Portfolio
         </button>
+        <button className={mobileTab === "war" ? "active" : ""} onClick={() => { setMobileTab("war"); setView("war"); }} aria-selected={mobileTab === "war"}>
+          ⚔️ War Room
+        </button>
         <button className={mobileTab === "chat" ? "active" : ""} onClick={() => setMobileTab("chat")} aria-selected={mobileTab === "chat"}>
           💬 Chat
         </button>
@@ -43,7 +48,7 @@ export default function App() {
 
       <div className="app">
         <main className={`main${!showMain ? " tab-hidden" : ""}`}>
-          {mainView === "portfolio" ? <Portfolio /> : <Analyst ticker={ticker} setTicker={setTicker} />}
+          {mainView === "portfolio" ? <Portfolio /> : mainView === "war" ? <WarRoom /> : <Analyst ticker={ticker} setTicker={setTicker} />}
         </main>
         <aside className={`side${mobileTab !== "chat" ? " tab-hidden" : ""}`}>
           <Chat ticker={ticker} setTicker={setTicker} />
