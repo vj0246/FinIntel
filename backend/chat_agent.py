@@ -307,11 +307,105 @@ def compare_quarterly(tickers: str) -> str:
     return json.dumps(out, default=str)
 
 
+@tool
+def get_annual_results(ticker: str, years: int = 5) -> str:
+    """YEARLY results (revenue, net profit, operating profit in ₹ crore, OPM %, EPS),
+    most recent (incl. TTM) first. Pass `years` to control how many — e.g. years=3
+    when the user asks for 'the last 3 years'. Use for annual/yearly results, FY
+    numbers, multi-year growth."""
+    n = max(1, min(int(years or 5), 10))
+    a = market.annual(ticker, n=n)
+    return json.dumps(a, default=str) if a else "Annual results aren't available for this stock."
+
+
+@tool
+def get_cash_flow(ticker: str) -> str:
+    """Annual CASH FLOW statement (₹ crore): operating cash flow, capex, FREE cash
+    flow, investing/financing flows, dividends paid. Use for 'cash flow', 'FCF',
+    'is it generating cash', 'capex'."""
+    cf = market.cashflow(ticker)
+    return json.dumps(cf, default=str) if cf else "Cash-flow data isn't available for this stock (live-only)."
+
+
+@tool
+def get_shareholding_pattern(ticker: str) -> str:
+    """Quarterly SHAREHOLDING pattern: promoters / FIIs / DIIs / government / public
+    (% of equity), recent quarters, most recent first. Use for 'promoter holding',
+    'FII stake', 'who owns this company', 'is smart money buying'."""
+    sh = market.shareholding(ticker)
+    return json.dumps(sh, default=str) if sh else "Shareholding data isn't available for this stock right now."
+
+
+@tool
+def get_quant_metrics(ticker: str) -> str:
+    """Deterministic QUANT metrics computed in Python from 6 months of real prices:
+    annualised volatility, Sharpe ratio, max drawdown, beta vs NIFTY 50, RSI(14),
+    SMA 20/50 trend signal. Use for 'volatility', 'Sharpe', 'beta', 'RSI',
+    'how risky is this quantitatively'."""
+    import quant
+    try:
+        return json.dumps(quant.metrics(ticker), default=str)
+    except Exception as e:
+        return f"Quant metrics unavailable: {e}"
+
+
+@tool
+def get_market_mood() -> str:
+    """Current snapshot of the main INDIAN INDICES: NIFTY 50, SENSEX, NIFTY BANK and
+    India VIX — level and day change %. Use for 'how is the market today',
+    'market mood', 'is the market up or down'."""
+    idx = market.indices()
+    return json.dumps(idx, default=str) if idx else "Index data isn't available right now."
+
+
+@tool
+def get_next_earnings(ticker: str) -> str:
+    """The next scheduled earnings/results date for an NSE stock. Use for 'when are
+    the results', 'next earnings date'."""
+    e = market.next_earnings(ticker)
+    return json.dumps(e, default=str) if e else "No scheduled earnings date is published for this stock."
+
+
+@tool
+def compare_fundamentals(tickers: str) -> str:
+    """Compare VALUATION & QUALITY side-by-side across MULTIPLE companies. Pass a
+    comma/space-separated list of NSE tickers. Returns each company's PE, PB, ROE,
+    market cap (₹ crore), dividend yield, debt/equity and net margin — the right
+    tool for 'which is cheaper / better quality', peer valuation comparisons."""
+    syms = [t.strip().upper() for t in re.split(r"[,\s]+", tickers) if t.strip()]
+    syms = list(dict.fromkeys(syms))[:6]
+    out = {}
+    for sym in syms:
+        try:
+            f = market.fundamentals(sym)
+            out[sym] = {k: f.get(k) for k in ("pe", "pb", "roe_pct", "market_cap_cr",
+                                              "dividend_yield_pct", "debt_to_equity",
+                                              "net_margin_pct", "sector") if f.get(k) is not None}
+        except Exception as e:
+            out[sym] = f"error: {e}"
+    return json.dumps(out, default=str)
+
+
+@tool
+def get_company_ecosystem(ticker: str) -> str:
+    """Map WHO A COMPANY WORKS WITH: its competitors, major customers, suppliers/
+    vendors, partners, subsidiaries, revenue segments, key inputs, moat and risks.
+    Use for 'who are its customers/vendors/suppliers', 'what does it depend on',
+    'business model / ecosystem of X'."""
+    import ecosystem
+    try:
+        return ecosystem.ecosystem_json(ticker)
+    except Exception as e:
+        return f"Ecosystem map unavailable: {e}"
+
+
 TOOLS = [get_quote, get_price_chart, get_fundamentals, get_valuation, get_fundamental_analysis,
          get_technical_analysis, explain_price_move, get_risk_assessment, get_bull_bear_case,
          analyze_news_sentiment, get_news_headlines, get_splits, get_dividends, get_52week_range,
-         get_performance, get_analyst_ratings, get_quarterly_results, get_key_stats,
-         get_balance_sheet, get_competitors, compare_quarterly,
+         get_performance, get_analyst_ratings, get_quarterly_results, get_annual_results,
+         get_key_stats, get_balance_sheet, get_cash_flow, get_shareholding_pattern,
+         get_quant_metrics, get_market_mood, get_next_earnings,
+         get_competitors, compare_quarterly, compare_fundamentals, get_company_ecosystem,
          ask_document, deep_desk_analysis]
 
 SYSTEM = SystemMessage(content=(
@@ -341,9 +435,15 @@ SYSTEM = SystemMessage(content=(
     "- You MAY call a tool multiple times with DIFFERENT tickers (e.g. to compare "
     "competitors) — that is encouraged. Just don't call the SAME tool with the SAME "
     "ticker twice. If a tool returns no data, say so and move on; don't retry it.\n"
+    "- MULTI-PERIOD questions: when the user asks for N quarters or N years, pass "
+    "that N to the tool (get_quarterly_results(quarters=N), get_annual_results("
+    "years=N)) and present ALL N periods in a table — never just the latest one. "
+    "'Last 2 quarterly results' means a table with 2 quarters.\n"
     "- For 'competitors/peers/rivals of X', call get_competitors FIRST, then "
-    "compare_quarterly (or other per-stock tools) on the returned tickers.\n"
-    "- NSE money is in Indian Rupees (₹); don't use '$' for NSE stocks.\n"
+    "compare_quarterly / compare_fundamentals on the returned tickers. For 'who are "
+    "its customers/suppliers/vendors/partners', use get_company_ecosystem.\n"
+    "- ALL money is ALWAYS in Indian Rupees — ₹, crore, lakh. NEVER use '$' or USD "
+    "for any figure unless the user explicitly asks for a dollar conversion.\n"
     "- Charts render automatically — comment on the trend, don't list every point.\n"
     "ANSWER STYLE: Be as SHORT as possible while technically precise. Lead with the "
     "number / verdict. Prefer 1-3 sentences or a small table; use figures, not prose. "
@@ -379,8 +479,12 @@ def _reflect_and_correct(question: str, answer: str, evidence: list) -> str:
             "Check the draft against the tool evidence:\n"
             "1. GROUNDING — every number/fact in the draft appears in the evidence "
             "(general finance knowledge needs no evidence).\n"
-            "2. CORRECTNESS — no misread figures, wrong units (₹ vs $), or wrong ticker.\n"
-            "3. COMPLETENESS — the user's question is actually answered.\n"
+            "2. CORRECTNESS — no misread figures, wrong units (₹ vs $ — everything must "
+            "be in ₹), or wrong ticker.\n"
+            "3. COMPLETENESS — the user's question is actually answered. If the user "
+            "asked for N quarters/years/periods, the draft MUST show all N distinct "
+            "periods (e.g. 'last 2 quarterly results' needs 2 quarters, not 1) — "
+            "if fewer are shown but the evidence has more, flag REVISE.\n"
             "4. COMPLIANCE — no guaranteed-return promises or directive personal advice "
             "('you should buy'); analytic verdicts (BUY/HOLD/SELL as opinion) are fine.\n"
             "5. SCOPE — the assistant only handles finance/markets/investing. If the "

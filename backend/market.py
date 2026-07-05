@@ -688,6 +688,128 @@ def balance_sheet(s):
     return _balance_sheet_from(_ticker(s))
 
 
+def cashflow(s, n=3):
+    """Annual cash-flow statement in ₹ crore (INR-normalised), most recent first:
+    operating cash flow, capex, free cash flow, investing/financing flows and
+    dividends paid. From the yfinance cash-flow statement."""
+    tk = _ticker(s)
+    try:
+        tk, cf = _stmt(tk, "cashflow", "cash_flow")
+        if cf is None or cf.empty:
+            return []
+        def at(row, col):
+            return cf.at[row, col] if row in cf.index else None
+        scale = _inr_scale(tk, at("Operating Cash Flow", cf.columns[0]))
+        cr = lambda v: round(float(v) * scale / 1e7) if v is not None and v == v else None
+        out = []
+        for col in list(cf.columns)[:max(1, n)]:
+            rec = {"year": str(getattr(col, "date", lambda: col)()),
+                   "operating_cf_cr": cr(at("Operating Cash Flow", col)),
+                   "capex_cr": cr(at("Capital Expenditure", col)),
+                   "free_cf_cr": cr(at("Free Cash Flow", col)),
+                   "investing_cf_cr": cr(at("Investing Cash Flow", col)),
+                   "financing_cf_cr": cr(at("Financing Cash Flow", col)),
+                   "dividends_paid_cr": cr(at("Cash Dividends Paid", col))}
+            if rec["free_cf_cr"] is None and rec["operating_cf_cr"] is not None and rec["capex_cr"] is not None:
+                rec["free_cf_cr"] = rec["operating_cf_cr"] + rec["capex_cr"]   # capex is negative
+            out.append({k: v for k, v in rec.items() if v is not None})
+        return [r for r in out if len(r) > 1]
+    except Exception:
+        return []
+
+
+def annual(s, n=5):
+    """Yearly results (revenue, net profit, operating profit in ₹ crore, OPM %, EPS),
+    most recent (TTM) first. Prefers Screener (~10 years), falls back to the yfinance
+    annual income statement (INR-normalised)."""
+    try:
+        a = screener.annual_results(_base(s), n=n)
+        if a:
+            return a
+    except Exception:
+        pass
+    tk = _ticker(s)
+    try:
+        tk, inc = _stmt(tk, "income_stmt", "financials")
+        if inc is None or inc.empty:
+            return []
+        def at(row, col):
+            return inc.at[row, col] if row in inc.index else None
+        scale = _inr_scale(tk, at("Total Revenue", inc.columns[0]))
+        cr = lambda v: round(float(v) * scale / 1e7) if v is not None and v == v else None
+        num = lambda v: round(float(v) * scale, 2) if v is not None and v == v else None
+        out = []
+        for col in list(inc.columns)[:max(1, n)]:
+            out.append({"year": str(getattr(col, "date", lambda: col)()),
+                        "revenue_cr": cr(at("Total Revenue", col)),
+                        "net_income_cr": cr(at("Net Income", col)),
+                        "operating_income_cr": cr(at("Operating Income", col)),
+                        "eps": num(at("Basic EPS", col))})
+        return out
+    except Exception:
+        return []
+
+
+def shareholding(s, n=5):
+    """Quarterly shareholding pattern (promoters / FIIs / DIIs / government / public,
+    % of equity), most recent first. From Screener; [] when unreachable."""
+    try:
+        return screener.shareholding(_base(s), n=n)
+    except Exception:
+        return []
+
+
+_INDICES = [("NIFTY 50", "^NSEI"), ("SENSEX", "^BSESN"),
+            ("NIFTY BANK", "^NSEBANK"), ("INDIA VIX", "^INDIAVIX")]
+_IDX_CACHE: dict = {}
+
+
+def indices() -> list:
+    """Snapshot of the main Indian indices: level + day change %. Cached 5 min."""
+    now = time.time()
+    if _IDX_CACHE and now - _IDX_CACHE.get("t", 0) < 300:
+        return _IDX_CACHE["data"]
+    import yfinance as yf
+    try:
+        from curl_cffi import requests as _creq
+        sess = _creq.Session(impersonate="chrome")
+    except Exception:
+        sess = None
+    out = []
+    for name, sym in _INDICES:
+        try:
+            tk = yf.Ticker(sym, session=sess) if sess else yf.Ticker(sym)
+            fi = tk.fast_info
+            last = _num(getattr(fi, "last_price", None))
+            prev = _num(getattr(fi, "previous_close", None))
+            if last is None:
+                h = tk.history(period="5d").dropna(subset=["Close"])
+                if len(h) >= 2:
+                    last, prev = float(h["Close"].iloc[-1]), float(h["Close"].iloc[-2])
+            if last is not None:
+                out.append({"index": name, "level": round(last, 2),
+                            "day_change_pct": round((last / prev - 1) * 100, 2) if prev else None})
+        except Exception:
+            continue
+    if out:
+        _IDX_CACHE["t"], _IDX_CACHE["data"] = now, out
+    return out
+
+
+def next_earnings(s) -> dict:
+    """Next scheduled earnings/results date from yfinance's calendar; {} if unknown."""
+    try:
+        cal = _ticker(s).calendar
+        if isinstance(cal, dict):
+            dates = cal.get("Earnings Date") or []
+            if dates:
+                return {"next_earnings_date": str(dates[0]),
+                        "window_end": str(dates[-1]) if len(dates) > 1 else None}
+    except Exception:
+        pass
+    return {}
+
+
 def performance(s):
     """Simple % moves derived from the chart series."""
     b = bundle(s)

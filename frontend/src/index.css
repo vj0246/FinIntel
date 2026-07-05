@@ -1960,3 +1960,131 @@ input:focus-visible {
   background: linear-gradient(90deg, var(--indigo), var(--buy));
   transition: width 0.6s var(--ease);
 }
+
+/* ------------------------------ Ecosystem tab ----------------------------- */
+.eco-phase {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 10px 0;
+  animation: eco-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes eco-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.up { color: var(--buy); }
+.down { color: var(--sell); }
+
+.eco-head { margin: 14px 0 8px; }
+
+.eco-title {
+  font-size: 19px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.eco-meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.eco-moat {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line-subtle);
+  border-left: 3px solid var(--indigo);
+  border-radius: 10px;
+  background: var(--glass);
+  font-size: 13.5px;
+}
+
+.eco-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.eco-card {
+  border: 1px solid var(--line-subtle);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--glass);
+}
+
+.eco-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.eco-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.eco-item {
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 3px 0;
+  color: var(--ink);
+}
+
+.eco-item span { color: var(--muted); }
+
+.eco-risk { border-left: 3px solid var(--sell); }
+
+.eco-seg {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.eco-seg-bar {
+  flex: 0 0 46%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--line-subtle);
+  position: relative;
+}
+
+.eco-seg-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--indigo), var(--think));
+}
+
+.eco-seg-bar em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.eco-peers { margin: 14px 0; }
+
+.eco-self td { font-weight: 700; background: color-mix(in srgb, var(--indigo) 7%, transparent); }

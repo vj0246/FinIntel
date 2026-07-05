@@ -226,3 +226,111 @@ def quarterly_results(ticker: str, n: int = 8) -> list:
     caller can fall back to yfinance."""
     text = _get_page(_key(ticker))
     return _parse_quarters(text, n) if text else []
+
+
+# --------------------------------------------------------------------------- #
+# Annual results + shareholding pattern (same page, different sections)
+# --------------------------------------------------------------------------- #
+def _section(txt: str, sec_id: str) -> str:
+    m = re.search(rf'id="{sec_id}".*?</section>', txt, re.S)
+    return m.group(0) if m else ""
+
+
+def _table(block: str):
+    """(columns, {row_label: [values]}) parsed from a Screener data table."""
+    thead = re.search(r"<thead.*?</thead>", block, re.S)
+    if not thead:
+        return [], {}
+    cols = [re.sub(r"<[^>]+>", "", c).strip()
+            for c in re.findall(r"<th[^>]*>(.*?)</th>", thead.group(0), re.S)]
+    cols = [c for c in cols if c]
+    rows = {}
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", block, re.S):
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)
+        if not cells:
+            continue
+        label = html.unescape(re.sub(r"<[^>]+>", "", cells[0])).replace("\xa0", " ").strip()
+        rows[label] = [_num(re.sub(r"<[^>]+>", "", c)) for c in cells[1:]]
+    return cols, rows
+
+
+# Screener annual "Profit & Loss" row label -> our key (₹ crore; EPS/OPM as given).
+_A_ROWS = {
+    "revenue_cr": ("Sales", "Revenue"),
+    "net_income_cr": ("Net Profit",),
+    "operating_income_cr": ("Operating Profit", "Financing Profit"),
+    "opm_pct": ("OPM %", "Financing Margin %"),
+    "eps": ("EPS in Rs", "EPS"),
+}
+
+
+def annual_results(ticker: str, n: int = 5) -> list:
+    """Yearly P&L (revenue, net profit, operating profit in ₹ crore, OPM %, EPS)
+    from Screener's Profit & Loss table — ~10 years + TTM. Most recent first."""
+    text = _get_page(_key(ticker))
+    if not text:
+        return []
+    cols, rows = _table(_section(text, "profit-loss"))
+    if not cols:
+        return []
+
+    def series(names):
+        for nm in names:
+            for label, vals in rows.items():
+                if label.lower().startswith(nm.lower()):
+                    return vals
+        return []
+
+    keyed = {k: series(names) for k, names in _A_ROWS.items()}
+    out = []
+    for i, y in enumerate(cols):
+        rec = {"year": y}
+        for k, vals in keyed.items():
+            v = vals[i] if i < len(vals) else None
+            rec[k] = (round(v) if k in ("revenue_cr", "net_income_cr", "operating_income_cr")
+                      else v) if v is not None else None
+        out.append(rec)
+    out.reverse()                        # most recent (TTM) first
+    return out[:max(1, n)]
+
+
+# Shareholding row label -> our key (values are % of equity).
+_SH_ROWS = {
+    "promoters_pct": ("Promoters",),
+    "fiis_pct": ("FIIs",),
+    "diis_pct": ("DIIs",),
+    "government_pct": ("Government",),
+    "public_pct": ("Public",),
+}
+
+
+def shareholding(ticker: str, n: int = 5) -> list:
+    """Quarterly shareholding pattern (promoters / FIIs / DIIs / government /
+    public, % of equity) from Screener. Most recent quarter first."""
+    text = _get_page(_key(ticker))
+    if not text:
+        return []
+    cols, rows = _table(_section(text, "shareholding"))
+    if not cols:
+        return []
+
+    def series(names):
+        for nm in names:
+            for label, vals in rows.items():
+                if label.replace("+", "").strip().lower().startswith(nm.lower()):
+                    return vals
+        return []
+
+    keyed = {k: series(names) for k, names in _SH_ROWS.items()}
+    out = []
+    for i, q in enumerate(cols):
+        rec = {"quarter": q}
+        any_val = False
+        for k, vals in keyed.items():
+            v = vals[i] if i < len(vals) else None
+            rec[k] = v
+            any_val = any_val or v is not None
+        if any_val:
+            out.append(rec)
+    out.reverse()                        # most recent first
+    return out[:max(1, n)]
