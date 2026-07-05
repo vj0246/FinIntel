@@ -70,30 +70,42 @@ class SlidingWindowLimiter:
 
 
 # --------------------------------------------------------------------------- #
-# Per-tier limiters
+# Per-tier limiters — deliberately LIGHT: the goal is stopping abuse/hammering,
+# never blocking a real user. Every action stays comfortably runnable several
+# times a minute.
 # --------------------------------------------------------------------------- #
-# Global: 60 req/min per IP
-_global = SlidingWindowLimiter(max_requests=60, window_seconds=60)
+# Global: 150 req/min per IP (autocomplete keystrokes + parallel UI fetches add up)
+_global = SlidingWindowLimiter(max_requests=150, window_seconds=60)
 
-# Expensive (LLM-calling) endpoints: 10 req/min per IP
-_expensive = SlidingWindowLimiter(max_requests=10, window_seconds=60)
+# LLM-calling endpoints: 12 req/min per IP
+_expensive = SlidingWindowLimiter(max_requests=12, window_seconds=60)
+
+# Heavy multi-agent orchestrations (many LLM calls each): 6 req/min per IP
+_heavy = SlidingWindowLimiter(max_requests=6, window_seconds=60)
 
 # Lightweight endpoints: 120 req/min per IP
 _lightweight = SlidingWindowLimiter(max_requests=120, window_seconds=60)
 
-# Upload: 5 req/min per IP
-_upload = SlidingWindowLimiter(max_requests=5, window_seconds=60)
+# Upload: 8 req/min per IP (chat documents + portfolio CSVs)
+_upload = SlidingWindowLimiter(max_requests=8, window_seconds=60)
 
 # Endpoint path → tier limiter
 _EXPENSIVE_PATHS = {"/api/analyze", "/api/resume", "/api/chat",
-                    "/api/task/start", "/api/task/step"}
-_LIGHTWEIGHT_PATHS = {"/api/symbols", "/api/health", "/api/cache/status"}
-_UPLOAD_PATHS = {"/api/upload"}
+                    "/api/task/start", "/api/task/step",
+                    "/api/portfolio/resume", "/api/war/resume",
+                    "/api/ecosystem", "/api/portfolio/stress"}
+_HEAVY_PATHS = {"/api/report", "/api/war/start", "/api/discover", "/api/brief",
+                "/api/portfolio/analyze", "/api/backtest"}
+_LIGHTWEIGHT_PATHS = {"/api/symbols", "/api/health", "/api/cache/status",
+                      "/api/track-record", "/api/ledger"}
+_UPLOAD_PATHS = {"/api/upload", "/api/portfolio"}
 
 
 def _tier_for(path: str) -> SlidingWindowLimiter | None:
     if path in _EXPENSIVE_PATHS:
         return _expensive
+    if path in _HEAVY_PATHS:
+        return _heavy
     if path in _LIGHTWEIGHT_PATHS:
         return _lightweight
     if path in _UPLOAD_PATHS:
@@ -107,7 +119,7 @@ def _tier_for(path: str) -> SlidingWindowLimiter | None:
 def _cleanup_loop():
     while True:
         time.sleep(300)
-        for limiter in (_global, _expensive, _lightweight, _upload):
+        for limiter in (_global, _expensive, _heavy, _lightweight, _upload):
             limiter.cleanup()
 
 

@@ -2343,3 +2343,10 @@ input:focus-visible {
   border-color: var(--indigo);
   font-weight: 700;
 }
+
+.rp-caption {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  margin: 8px 0 4px;
+}

@@ -106,34 +106,47 @@ export default function Report() {
           {r.financials && (r.financials.quarterly?.length > 0 || r.financials.annual?.length > 0) && (
             <div className="rp-section"><h3>Financials (₹ crore)</h3>
               {r.financials.quarterly?.length > 0 && (
-                <div className="pf-tablewrap"><table className="pf-table">
-                  <thead><tr><th>Quarter</th><th>Revenue</th><th>Net profit</th><th>Op. profit</th><th>EPS ₹</th></tr></thead>
-                  <tbody>{r.financials.quarterly.map((q, i) => (
-                    <tr key={i}><td>{q.quarter}</td><td>{fmt(q.revenue_cr, 0)}</td><td>{fmt(q.net_income_cr, 0)}</td><td>{fmt(q.operating_income_cr, 0)}</td><td>{fmt(q.eps)}</td></tr>
-                  ))}</tbody>
-                </table></div>
+                <>
+                  <div className="rp-caption">Quarterly — each row is a 3-month period</div>
+                  <div className="pf-tablewrap"><table className="pf-table">
+                    <thead><tr><th>Quarter (3 mo)</th><th>Revenue</th><th>Net profit</th><th>Op. profit</th><th>EPS ₹</th></tr></thead>
+                    <tbody>{r.financials.quarterly.map((q, i) => (
+                      <tr key={i}><td>{q.quarter}</td><td>{fmt(q.revenue_cr, 0)}</td><td>{fmt(q.net_income_cr, 0)}</td><td>{fmt(q.operating_income_cr, 0)}</td><td>{fmt(q.eps)}</td></tr>
+                    ))}</tbody>
+                  </table></div>
+                </>
               )}
               {r.financials.annual?.length > 0 && (
-                <div className="pf-tablewrap"><table className="pf-table">
-                  <thead><tr><th>Year</th><th>Revenue</th><th>Net profit</th><th>OPM %</th><th>EPS ₹</th></tr></thead>
-                  <tbody>{r.financials.annual.map((a, i) => (
-                    <tr key={i}><td>{a.year}</td><td>{fmt(a.revenue_cr, 0)}</td><td>{fmt(a.net_income_cr, 0)}</td><td>{fmt(a.opm_pct)}</td><td>{fmt(a.eps)}</td></tr>
-                  ))}</tbody>
-                </table></div>
+                <>
+                  <div className="rp-caption">Annual — each row is a FULL fiscal year (12 months, ended in the month shown)</div>
+                  <div className="pf-tablewrap"><table className="pf-table">
+                    <thead><tr><th>FY ended</th><th>Revenue</th><th>Net profit</th><th>OPM %</th><th>EPS ₹</th></tr></thead>
+                    <tbody>{r.financials.annual.map((a, i) => (
+                      <tr key={i}><td>{String(a.year).match(/^[A-Z][a-z]{2} \d{4}$/) ? `FY ${a.year}` : a.year}</td><td>{fmt(a.revenue_cr, 0)}</td><td>{fmt(a.net_income_cr, 0)}</td><td>{fmt(a.opm_pct)}</td><td>{fmt(a.eps)}</td></tr>
+                    ))}</tbody>
+                  </table></div>
+                </>
               )}
             </div>
           )}
 
-          {r.shareholding && (
-            <div className="rp-section"><h3>Shareholding pattern (%)</h3>
-              <div className="pf-tablewrap"><table className="pf-table">
-                <thead><tr><th>Quarter</th><th>Promoters</th><th>FIIs</th><th>DIIs</th><th>Public</th></tr></thead>
-                <tbody>{r.shareholding.data.map((s, i) => (
-                  <tr key={i}><td>{s.quarter}</td><td>{fmt(s.promoters_pct)}</td><td>{fmt(s.fiis_pct)}</td><td>{fmt(s.diis_pct)}</td><td>{fmt(s.public_pct)}</td></tr>
-                ))}</tbody>
-              </table></div>
-            </div>
-          )}
+          {r.shareholding && (() => {
+            const ALL = [["promoters_pct", "Promoters"], ["fiis_pct", "FIIs"], ["diis_pct", "DIIs"],
+                         ["government_pct", "Govt"], ["public_pct", "Public"]];
+            const cols = ALL.filter(([k]) => r.shareholding.data.some((s) => s[k]));   // drop all-zero/empty columns
+            const noPromoter = !cols.some(([k]) => k === "promoters_pct");
+            return (
+              <div className="rp-section"><h3>Shareholding pattern (%)</h3>
+                {noPromoter && <div className="rp-caption">No promoter holding — this is a professionally managed / widely held company.</div>}
+                <div className="pf-tablewrap"><table className="pf-table">
+                  <thead><tr><th>Quarter</th>{cols.map(([k, label]) => <th key={k}>{label}</th>)}</tr></thead>
+                  <tbody>{r.shareholding.data.map((s, i) => (
+                    <tr key={i}><td>{s.quarter}</td>{cols.map(([k]) => <td key={k}>{fmt(s[k])}</td>)}</tr>
+                  ))}</tbody>
+                </table></div>
+              </div>
+            );
+          })()}
 
           {eco && (eco.competitors?.length > 0 || eco.moat) && (
             <div className="rp-section"><h3>Ecosystem</h3>
