@@ -3,13 +3,21 @@ import Analyst from "./Analyst.jsx";
 import Portfolio from "./Portfolio.jsx";
 import WarRoom from "./WarRoom.jsx";
 import Ecosystem from "./Ecosystem.jsx";
+import Discover from "./Discover.jsx";
+import Brief from "./Brief.jsx";
+import Report from "./Report.jsx";
+import Backtest from "./Backtest.jsx";
 import Chat from "./Chat.jsx";
 
 const VIEWS = [
   ["analyst", "📊 Analyst"],
+  ["brief", "🌅 Brief"],
+  ["discover", "🔎 Discover"],
   ["portfolio", "💼 Portfolio"],
   ["war", "⚔️ War Room"],
   ["eco", "🕸️ Ecosystem"],
+  ["report", "📑 Report"],
+  ["backtest", "⏳ Backtest"],
 ];
 
 export default function App() {
@@ -55,7 +63,9 @@ export default function App() {
       <div className="app">
         <main className={`main${!showMain ? " tab-hidden" : ""}`}>
           {mainView === "portfolio" ? <Portfolio /> : mainView === "war" ? <WarRoom /> :
-           mainView === "eco" ? <Ecosystem /> : <Analyst ticker={ticker} setTicker={setTicker} />}
+           mainView === "eco" ? <Ecosystem /> : mainView === "discover" ? <Discover /> :
+           mainView === "brief" ? <Brief /> : mainView === "report" ? <Report /> :
+           mainView === "backtest" ? <Backtest /> : <Analyst ticker={ticker} setTicker={setTicker} />}
         </main>
         <aside className={`side${mobileTab !== "chat" ? " tab-hidden" : ""}`}>
           <Chat ticker={ticker} setTicker={setTicker} />

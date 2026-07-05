@@ -17,6 +17,7 @@ export default function Portfolio() {
   const [feedback, setFeedback] = useState("");
   const [phase, setPhase] = useState("idle");     // idle | working | awaiting | done
   const [record, setRecord] = useState(null);     // track-record scoreboard
+  const [ledger, setLedger] = useState(null);     // paper-trading ledger
   const esRef = useRef(null);
   const fileRef = useRef(null);
   const thread = useRef(crypto.randomUUID());
@@ -30,6 +31,10 @@ export default function Portfolio() {
       const r = await fetch(`${API}/api/track-record`);
       setRecord(await r.json());
     } catch { /* backend offline — scoreboard just stays hidden */ }
+    try {
+      const l = await fetch(`${API}/api/ledger`);
+      setLedger(await l.json());
+    } catch { /* ledger stays hidden */ }
   }
 
   async function load(body) {
@@ -180,6 +185,42 @@ export default function Portfolio() {
             <input value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="…or revise (e.g. 'I want to keep my INFY position')" />
             <button onClick={() => feedback.trim() && (decide(feedback.trim()), setFeedback(""))} disabled={!feedback.trim()}>↩ Revise</button>
           </div>
+        </div>
+      )}
+
+      {ledger && ledger.positions?.length > 0 && (
+        <div className="pf-record">
+          <div className="label" style={{ marginBottom: 6 }}>
+            Paper-trading ledger — ₹{fmt(ledger.notional_per_call, 0)} virtual per call
+          </div>
+          <div className="pf-chips" style={{ marginBottom: 8 }}>
+            <span className={`pf-chip ${ledger.total_pnl >= 0 ? "pf-up" : "pf-down"}`}>Total P&L ₹{fmt(ledger.total_pnl, 0)}</span>
+            {ledger.win_rate_pct !== null && <span className="pf-chip">Win rate {ledger.win_rate_pct}%</span>}
+            {ledger.alpha !== null && ledger.alpha !== undefined && (
+              <span className={`pf-chip ${ledger.alpha >= 0 ? "pf-up" : "pf-down"}`}>Alpha vs NIFTY ₹{fmt(ledger.alpha, 0)}</span>
+            )}
+          </div>
+          <div className="pf-tablewrap">
+            <table className="pf-table">
+              <thead><tr><th>Date</th><th>Stock</th><th>Call</th><th>Entry ₹</th><th>Now ₹</th><th>Days</th><th>P&L ₹</th><th>P&L %</th><th>vs NIFTY ₹</th></tr></thead>
+              <tbody>
+                {ledger.positions.slice(0, 8).map((p, i) => (
+                  <tr key={i}>
+                    <td>{p.date}</td>
+                    <td>{p.ticker}</td>
+                    <td>{p.verdict === "BUY" ? "🟢 Long" : "🔴 Short signal"}</td>
+                    <td>{fmt(p.entry_price)}</td>
+                    <td>{fmt(p.current_price)}</td>
+                    <td>{p.days_held ?? "—"}</td>
+                    <td className={p.pnl > 0 ? "pf-up" : p.pnl < 0 ? "pf-down" : ""}>{fmt(p.pnl, 0)}</td>
+                    <td className={p.pnl_pct > 0 ? "pf-up" : p.pnl_pct < 0 ? "pf-down" : ""}>{pct(p.pnl_pct)}</td>
+                    <td>{p.alpha !== undefined ? fmt(p.alpha, 0) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="footnote" style={{ marginTop: 4 }}>Every approved BUY/SELL becomes a ₹1,00,000 virtual position, marked to market live. HOLD calls aren't traded.</div>
         </div>
       )}
 

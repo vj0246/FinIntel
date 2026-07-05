@@ -2088,3 +2088,167 @@ input:focus-visible {
 .eco-peers { margin: 14px 0; }
 
 .eco-self td { font-weight: 700; background: color-mix(in srgb, var(--indigo) 7%, transparent); }
+
+/* ---------------------------- Morning Brief tab --------------------------- */
+.bf-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 0;
+}
+
+.bf-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 10px;
+  background: var(--glass);
+  min-width: 108px;
+}
+
+.bf-global { opacity: 0.92; }
+
+.bf-name {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.bf-level { font-size: 14px; font-weight: 700; }
+
+.bf-chg { font-family: var(--mono); font-size: 11px; }
+
+.bf-flag {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 4px 0;
+  color: var(--signal, #b45309);
+}
+
+.bf-x {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 0 0 0 4px;
+}
+
+/* ------------------------------- Report tab ------------------------------- */
+.report {
+  margin-top: 16px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 14px;
+  padding: 20px 22px;
+  background: var(--glass);
+}
+
+.rp-cover { border-bottom: 1px solid var(--line-subtle); padding-bottom: 12px; }
+
+.rp-title {
+  font-size: 21px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rp-section { margin-top: 18px; }
+
+.rp-section h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.rp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.rp-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+}
+
+.rp-stat span { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.rp-stat b { font-size: 13.5px; }
+
+@media print {
+  .topbar, .mobile-tabs, .side, .task-setup, .eyebrow, .footnote, .eco-phase { display: none !important; }
+  .app, .main { display: block !important; overflow: visible !important; height: auto !important; }
+  .report { border: none; background: #fff; }
+  body { background: #fff; }
+}
+
+/* ------------------------------ Backtest tab ------------------------------ */
+.bt-form .bt-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-top: 10px;
+}
+
+.bt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.bt-field input, .bt-field select {
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+  background: var(--glass);
+  color: var(--ink, inherit);
+  width: 130px;
+}
+
+.bt-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding-bottom: 8px;
+  cursor: pointer;
+}
+
+.bt-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.bt-card { display: flex; flex-direction: column; gap: 8px; }
+.bt-bench { border-style: dashed; opacity: 0.92; }
+
+.bt-chart {
+  width: 100%;
+  height: 90px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  background: var(--glass);
+}
+
+/* 8 desktop view tabs — allow horizontal scroll instead of wrapping the bar */
+.view-tabs { overflow-x: auto; scrollbar-width: none; }
+.view-tabs::-webkit-scrollbar { display: none; }
+.view-tabs button { white-space: nowrap; }
+.mobile-tabs { flex-wrap: wrap; }

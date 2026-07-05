@@ -284,6 +284,93 @@ async def track_record_api():
     return await _aio.to_thread(verdict_log.track_record)
 
 
+@app.get("/api/ledger")
+async def ledger_api():
+    """Paper-trading ledger: every BUY/SELL call as a ₹1L virtual position, with alpha vs NIFTY."""
+    import verdict_log
+    import asyncio as _aio
+    return await _aio.to_thread(verdict_log.ledger)
+
+
+@app.get("/api/discover")
+async def discover_api(q: str, thread: str):
+    """Natural-language stock screener over the curated NSE universe."""
+    import discover
+    query = gr.validate_text(q, max_len=500, field_name="Screen")
+    gr.validate_uuid(thread)
+    if gr.check_prompt_injection(query):
+        raise HTTPException(status_code=422, detail="Describe a stock screen, e.g. 'IT stocks with ROE above 20'.")
+
+    async def stream():
+        try:
+            async for ev in discover.run(query, thread):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/brief")
+async def brief_api(thread: str, tickers: str = ""):
+    """Morning brief: global cues + Indian indices + the user's watchlist."""
+    import brief
+    gr.validate_uuid(thread)
+    tick_list = [t for t in tickers.split(",") if t.strip()][:8]
+    for t in tick_list:
+        gr.validate_ticker(t)
+
+    async def stream():
+        try:
+            async for ev in brief.run(tick_list, thread):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/report")
+async def report_api(ticker: str, thread: str):
+    """One-click deep research report orchestrating every engine on the desk."""
+    import report
+    t = gr.validate_ticker(ticker)
+    gr.validate_uuid(thread)
+
+    async def stream():
+        try:
+            async for ev in report.run(t, thread):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/backtest")
+async def backtest_api(request: Request, thread: str):
+    """What-if backtest: lumpsum / SIP / both, dividends, brokerage, NIFTY benchmark."""
+    import backtest
+    gr.validate_uuid(thread)
+    try:
+        params = backtest.validate_params(dict(request.query_params))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    async def stream():
+        try:
+            async for ev in backtest.run(params, thread):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/api/symbols")
 async def symbols(q: str = ""):
     """Autocomplete for the search bar: company names + NSE tickers."""
