@@ -270,6 +270,11 @@ def get_competitors(ticker: str) -> str:
     """Identify the main NSE-listed competitors / peers of a company and their tickers.
     Use this FIRST for 'competitors of X', 'peers', 'rivals', 'vs its competition',
     then feed the returned tickers into compare_quarterly or other per-stock tools."""
+    import llm_cache
+    ck = llm_cache.key("competitors", ticker.upper())
+    cached = llm_cache.get(ck)
+    if cached is not None:
+        return cached
     name = ticker
     try:
         name = market.bundle(ticker).get("name", ticker)
@@ -284,7 +289,9 @@ def get_competitors(ticker: str) -> str:
     try:
         obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
         peers = [p for p in obj.get("peers", []) if p.get("ticker")][:4]
-        return json.dumps({"company": {"ticker": ticker.upper(), "name": name}, "peers": peers}, default=str)
+        out = json.dumps({"company": {"ticker": ticker.upper(), "name": name}, "peers": peers}, default=str)
+        llm_cache.put(ck, out, ttl=24 * 3600)
+        return out
     except Exception:
         return raw
 
@@ -509,17 +516,32 @@ def _reflect_and_correct(question: str, answer: str, evidence: list) -> str:
         return answer   # reflection must never break the answer path
 
 
-async def run_chat(ticker: str, question: str, thread_id: str):
+_PROFILE_NOTES = {
+    "conservative": ("[User risk profile: CONSERVATIVE — low risk tolerance, ~10% max drawdown "
+                     "comfort. When discussing specific stocks, explicitly note suitability: flag "
+                     "high volatility (>25% annualised), high beta (>1.0), heavy drawdowns or "
+                     "speculative names as unsuitable for this profile.]"),
+    "balanced": ("[User risk profile: BALANCED — moderate risk tolerance, ~20% drawdown comfort. "
+                 "Note suitability where volatility exceeds ~35% or beta exceeds ~1.3.]"),
+    "aggressive": ("[User risk profile: AGGRESSIVE — high risk tolerance, ~35% drawdown comfort. "
+                   "Suitability caveats only for extreme cases.]"),
+}
+
+
+async def run_chat(ticker: str, question: str, thread_id: str, profile: str = ""):
     _ACTIVE["thread"] = thread_id           # so ask_document finds this chat's upload
     history = _history.get(thread_id, [])
     doc_note = ""
     if docstore.has_document(thread_id):
         doc_note = (f"\n[A document is attached to this chat: '{docstore.doc_name(thread_id)}'. "
                     "If the question is about its contents, use the ask_document tool.]")
+    profile_note = _PROFILE_NOTES.get(gr.validate_profile(profile), "")
+    if profile_note:
+        profile_note = "\n" + profile_note
     user_msg = HumanMessage(content=(
         f"[Currently selected NSE stock: {ticker.upper()} — use it when the user says "
         f"'this stock' / 'it', but ignore it for general or multi-company questions.]"
-        f"{doc_note}\n{question}"))
+        f"{doc_note}{profile_note}\n{question}"))
     messages = history + [user_msg]
     final_answer = ""
     evidence = []   # (tool_name, result) pairs — the reviewer checks the draft against these

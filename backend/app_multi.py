@@ -134,10 +134,11 @@ async def task_step(thread: str, decision: str):
 
 
 @app.get("/api/chat")
-async def chat(ticker: str, q: str, thread: str):
+async def chat(ticker: str, q: str, thread: str, profile: str = ""):
     t = gr.validate_ticker(ticker)
     question = gr.validate_text(q, max_len=2000, field_name="Question")
     tid = gr.validate_uuid(thread)
+    prof = gr.validate_profile(profile)
 
     # Prompt injection check
     if gr.check_prompt_injection(question):
@@ -149,7 +150,7 @@ async def chat(ticker: str, q: str, thread: str):
 
     async def stream():
         try:
-            async for ev in run_chat(t, question, tid):
+            async for ev in run_chat(t, question, tid, prof):
                 # Belt-and-braces: chat_agent already ran the compliance pipeline on the
                 # final answer; re-screen here so error/fallback answers are covered too,
                 # and the mandatory disclaimer survives any truncation.
@@ -188,13 +189,14 @@ async def portfolio_upload(thread: str = Form(...), file: UploadFile = File(None
 
 
 @app.get("/api/portfolio/analyze")
-async def portfolio_analyze(thread: str):
+async def portfolio_analyze(thread: str, profile: str = ""):
     import portfolio
     tid = gr.validate_uuid(thread)
+    prof = gr.validate_profile(profile)
 
     async def stream():
         try:
-            async for ev in portfolio.analyze(tid):
+            async for ev in portfolio.analyze(tid, prof):
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})
@@ -250,6 +252,33 @@ async def war_resume(thread: str, decision: str):
     async def stream():
         try:
             async for ev in war_room.resume(tid, d):
+                yield sse(ev)
+        except Exception as e:
+            yield sse({"type": "error", "text": str(e)})
+        yield sse({"type": "done"})
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/portfolio/stress")
+async def portfolio_stress(thread: str, scenario: str, profile: str = "",
+                           market: str = "0", crude: str = "0", inr: str = "0", rates: str = "0"):
+    """Deterministic factor-model stress test of the loaded holdings."""
+    import stress
+    tid = gr.validate_uuid(thread)
+    scen = scenario if scenario in (*stress.SCENARIOS, "custom") else ""
+    if not scen:
+        raise HTTPException(status_code=422, detail="Unknown scenario.")
+    custom = {"market": market, "crude": crude, "inr": inr, "rates": rates}
+    try:
+        for v in custom.values():
+            float(v)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Custom shocks must be numbers.")
+
+    async def stream():
+        try:
+            async for ev in stress.run(tid, scen, custom, profile):
                 yield sse(ev)
         except Exception as e:
             yield sse({"type": "error", "text": str(e)})

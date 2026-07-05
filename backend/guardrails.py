@@ -251,8 +251,15 @@ def semantic_compliance_check(text: str) -> dict:
 
     Returns {"compliant": bool, "issues": str}. Fails OPEN (compliant=True) if
     the LLM is unavailable — the deterministic regex layer has already run.
+    Verdicts are cached per exact text (6h) so re-screening the same content
+    (approve/final flows, retries) costs zero LLM calls.
     """
     from langchain_core.messages import HumanMessage
+    import llm_cache
+    ck = llm_cache.key("sem-compliance", text[:6000])
+    cached = llm_cache.get(ck)
+    if cached is not None:
+        return dict(cached)
     try:
         raw = _get_compliance_llm().invoke([HumanMessage(content=(
             "You are a financial-compliance screener (SEC / SEBI style rules):\n"
@@ -262,11 +269,22 @@ def semantic_compliance_check(text: str) -> dict:
             f"RESPONSE:\n{text[:6000]}"
         ))]).content
         obj = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
-        return {"compliant": bool(obj.get("compliant", True)),
-                "issues": str(obj.get("issues", ""))}
+        verdict = {"compliant": bool(obj.get("compliant", True)),
+                   "issues": str(obj.get("issues", ""))}
+        llm_cache.put(ck, verdict, ttl=6 * 3600)
+        return verdict
     except Exception as e:
         logger.warning(f"Semantic compliance check unavailable ({e}); regex layer only.")
         return {"compliant": True, "issues": ""}
+
+
+_PROFILES = ("conservative", "balanced", "aggressive")
+
+
+def validate_profile(profile: str) -> str:
+    """Whitelist the user's risk profile; anything unknown becomes ''."""
+    p = (profile or "").strip().lower()
+    return p if p in _PROFILES else ""
 
 
 def rewrite_for_compliance(text: str, issues: str) -> str:

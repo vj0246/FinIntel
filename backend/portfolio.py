@@ -228,11 +228,23 @@ def _ask(role: str, content: str) -> str:
     return _llm.invoke([HumanMessage(content=f"{role}\n\n{content}")]).content.strip()
 
 
-def _risk_officer(rows: list[dict], metrics: dict) -> str:
+def _profile_note(profile: str) -> str:
+    if not profile:
+        return ""
+    limits = {"conservative": "max ~25% annualised volatility per holding, drawdown tolerance ~10%",
+              "balanced": "up to ~35% volatility, drawdown tolerance ~20%",
+              "aggressive": "up to ~50% volatility, drawdown tolerance ~35%"}
+    return (f"\nUSER RISK PROFILE: {profile} ({limits[profile]}). Judge suitability "
+            "against THIS profile and say so explicitly where a holding or the "
+            "portfolio doesn't fit it.")
+
+
+def _risk_officer(rows: list[dict], metrics: dict, profile: str = "") -> str:
     return _ask(
         "You are a portfolio RISK OFFICER. Using ONLY the metrics and flags below "
         "(never invent numbers), write the 3-5 most important portfolio-level findings "
-        "as short bullets. Rank by severity. Cite the actual figures. All money is ₹.",
+        "as short bullets. Rank by severity. Cite the actual figures. All money is ₹."
+        + _profile_note(profile),
         json.dumps({"metrics": metrics,
                     "holdings": [{k: r.get(k) for k in
                                   ("ticker", "weight_pct", "pnl_pct", "pe", "sector",
@@ -241,7 +253,7 @@ def _risk_officer(rows: list[dict], metrics: dict) -> str:
     )
 
 
-def _synthesise(metrics: dict, risk: str, feedback: str = "") -> dict:
+def _synthesise(metrics: dict, risk: str, feedback: str = "", profile: str = "") -> dict:
     fb = f"\n\nReviewer feedback to address: {feedback}" if feedback else ""
     raw = _ask(
         "You are the SYNTHESISER of a portfolio audit. Combine the metrics and the risk "
@@ -250,7 +262,7 @@ def _synthesise(metrics: dict, risk: str, feedback: str = "") -> dict:
         '"actions":[{"action":"one concrete, specific step (e.g. Trim X from 34% towards 25%)", '
         '"reason":"one sentence tied to the data"}]} '
         "Give 2-4 actions, most important first. Frame everything as analysis for the "
-        "user to consider — never directive commands." + fb,
+        "user to consider — never directive commands." + _profile_note(profile) + fb,
         f"METRICS:\n{json.dumps(metrics, default=str)}\n\nRISK FINDINGS:\n{risk}",
     )
     try:
@@ -274,11 +286,13 @@ def _screen_proposal(p: dict) -> dict:
 # --------------------------------------------------------------------------- #
 # Public streaming API
 # --------------------------------------------------------------------------- #
-async def analyze(thread_id: str):
+async def analyze(thread_id: str, profile: str = ""):
     sess = _sessions.get(thread_id)
     if not sess or not sess["holdings"]:
         yield {"type": "error", "text": "No holdings found. Upload or paste your portfolio first."}
         return
+    profile = gr.validate_profile(profile)
+    sess["profile"] = profile
 
     n = len(sess["holdings"])
     yield {"type": "intro",
@@ -312,11 +326,11 @@ async def analyze(thread_id: str):
     sess["rows"], sess["metrics"] = rows, metrics
     yield {"type": "portfolio", "metrics": metrics}
 
-    risk = await asyncio.to_thread(_risk_officer, rows, metrics)
+    risk = await asyncio.to_thread(_risk_officer, rows, metrics, profile)
     risk = gr.enforce_compliance(risk, semantic=False, disclaimer=False)
     yield {"type": "agent", "name": "Risk", "text": risk}
 
-    proposal = await asyncio.to_thread(_synthesise, metrics, risk)
+    proposal = await asyncio.to_thread(_synthesise, metrics, risk, "", profile)
     proposal = _screen_proposal(proposal)
     sess["pending"] = {"risk": risk, **proposal}
     yield {"type": "approval_request", "summary": proposal["summary"],
@@ -355,7 +369,8 @@ async def resume(thread_id: str, decision: str):
 
     else:   # revise with feedback -> new proposal -> pause again
         proposal = await asyncio.to_thread(
-            _synthesise, sess["metrics"], sess["pending"]["risk"], decision)
+            _synthesise, sess["metrics"], sess["pending"]["risk"], decision,
+            sess.get("profile", ""))
         proposal = _screen_proposal(proposal)
         sess["pending"] = {"risk": sess["pending"]["risk"], **proposal}
         yield {"type": "approval_request", "summary": proposal["summary"],

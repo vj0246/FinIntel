@@ -18,6 +18,8 @@ export default function Portfolio() {
   const [phase, setPhase] = useState("idle");     // idle | working | awaiting | done
   const [record, setRecord] = useState(null);     // track-record scoreboard
   const [ledger, setLedger] = useState(null);     // paper-trading ledger
+  const [st, setSt] = useState({ rows: [], impact: null, narrative: "", phase: "", busy: false, scenario: null, custom: { market: -10, crude: 0, inr: 0, rates: 0 }, showCustom: false });
+  const stRef = useRef(null);
   const esRef = useRef(null);
   const fileRef = useRef(null);
   const thread = useRef(crypto.randomUUID());
@@ -88,10 +90,44 @@ export default function Portfolio() {
     es.onerror = () => { es.close(); setPhase("idle"); setItems((p) => [...p, { kind: "error", text: "Stream dropped. Is the backend running?" }]); };
   }
 
-  const audit = () => listen(`${API}/api/portfolio/analyze?thread=${thread.current}`);
+  const profileParam = () => {
+    try { const p = JSON.parse(localStorage.getItem("equity-desk-risk-profile"))?.profile; return p ? `&profile=${p}` : ""; }
+    catch { return ""; }
+  };
+  const audit = () => listen(`${API}/api/portfolio/analyze?thread=${thread.current}${profileParam()}`);
   const decide = (d) => listen(`${API}/api/portfolio/resume?thread=${thread.current}&decision=${encodeURIComponent(d)}`);
 
   const running = phase === "working";
+
+  function stressRun(scenario, custom) {
+    if (st.busy || holdings.length === 0) return;
+    if (stRef.current) stRef.current.close();
+    setSt((s) => ({ ...s, rows: [], impact: null, narrative: "", phase: "", busy: true, scenario }));
+    const qs = custom
+      ? `&market=${custom.market || 0}&crude=${custom.crude || 0}&inr=${custom.inr || 0}&rates=${custom.rates || 0}`
+      : "";
+    const es = new EventSource(`${API}/api/portfolio/stress?thread=${thread.current}&scenario=${scenario}${qs}${profileParam()}`);
+    stRef.current = es;
+    es.onmessage = (e) => {
+      const ev = JSON.parse(e.data);
+      if (ev.type === "done") { es.close(); setSt((s) => ({ ...s, busy: false, phase: "" })); return; }
+      if (ev.type === "phase") setSt((s) => ({ ...s, phase: ev.text }));
+      else if (ev.type === "shock") setSt((s) => ({ ...s, rows: [...s.rows.filter((r) => r.ticker !== ev.ticker), ev].sort((a, b) => a.loss - b.loss) }));
+      else if (ev.type === "impact") setSt((s) => ({ ...s, impact: ev }));
+      else if (ev.type === "narrative") setSt((s) => ({ ...s, narrative: ev.text }));
+      else if (ev.type === "error") { setSt((s) => ({ ...s, busy: false, phase: `⚠ ${ev.text}` })); es.close(); }
+    };
+    es.onerror = () => { es.close(); setSt((s) => ({ ...s, busy: false })); };
+  }
+
+  const SCENARIOS = [
+    ["gfc_2008", "🌊 2008 crisis"],
+    ["covid_crash", "🦠 COVID crash"],
+    ["taper_2013", "💸 Rupee rout"],
+    ["crude_spike", "🛢 Crude +40%"],
+    ["it_winter", "❄️ IT winter"],
+    ["rate_shock", "🏦 Rates +100bps"],
+  ];
 
   return (
     <div className="desk">
@@ -151,6 +187,74 @@ export default function Portfolio() {
           {metrics.weighted_pe && <span className="pf-chip">Weighted P/E {metrics.weighted_pe}</span>}
           <span className="pf-chip">Top position {metrics.top_position.ticker} {metrics.top_position.weight_pct}%</span>
           {Object.entries(metrics.sectors).slice(0, 3).map(([s, w]) => <span key={s} className="pf-chip">{s} {w}%</span>)}
+        </div>
+      )}
+
+      {holdings.length > 0 && (
+        <div className="st-panel">
+          <div className="label" style={{ marginBottom: 6 }}>Stress test — what would this scenario do to your portfolio?</div>
+          <div className="presets">
+            {SCENARIOS.map(([key, label]) => (
+              <button key={key} className={`preset${st.scenario === key ? " active" : ""}`}
+                onClick={() => stressRun(key)} disabled={st.busy}>{label}</button>
+            ))}
+            <button className="preset" onClick={() => setSt((s) => ({ ...s, showCustom: !s.showCustom }))} disabled={st.busy}>⚙ Custom…</button>
+          </div>
+          {st.showCustom && (
+            <div className="bt-row" style={{ marginTop: 8 }}>
+              {[["market", "Market %"], ["crude", "Crude %"], ["inr", "USD/INR %"], ["rates", "Rates bps"]].map(([k, label]) => (
+                <label key={k} className="bt-field"><span>{label}</span>
+                  <input type="number" value={st.custom[k]}
+                    onChange={(e) => setSt((s) => ({ ...s, custom: { ...s.custom, [k]: e.target.value } }))} disabled={st.busy} />
+                </label>
+              ))}
+              <button className="run" onClick={() => stressRun("custom", st.custom)} disabled={st.busy}>▶ Shock it</button>
+            </div>
+          )}
+          {st.busy && st.phase && <div className="eco-phase">{st.phase}</div>}
+          {!st.busy && st.phase.startsWith("⚠") && <div className="err">{st.phase}</div>}
+
+          {st.impact && (
+            <div className="pf-chips" style={{ marginTop: 8 }}>
+              <span className={`pf-chip ${st.impact.portfolio_move_pct >= 0 ? "pf-up" : "pf-down"}`}>
+                Portfolio {pct(st.impact.portfolio_move_pct)} → ₹{fmt(st.impact.shocked_value, 0)}
+              </span>
+              <span className="pf-chip pf-down">Loss ₹{fmt(Math.abs(st.impact.total_loss), 0)}</span>
+              {st.impact.worst_position && <span className="pf-chip">Worst: {st.impact.worst_position.ticker} {pct(st.impact.worst_position.est_move_pct)}</span>}
+              {st.impact.profile && (
+                <span className={`pf-chip ${st.impact.within_tolerance ? "pf-up" : "pf-down"}`}>
+                  {st.impact.within_tolerance ? "✓ within" : "✕ breaches"} your {st.impact.profile} tolerance ({st.impact.tolerance_pct}%)
+                </span>
+              )}
+            </div>
+          )}
+
+          {st.rows.length > 0 && (
+            <div className="pf-tablewrap">
+              <table className="pf-table">
+                <thead><tr><th>Stock</th><th>Sector</th><th>Beta</th><th>Value ₹</th><th>Est. move</th><th>Shocked ₹</th><th>Loss ₹</th></tr></thead>
+                <tbody>
+                  {st.rows.map((r) => (
+                    <tr key={r.ticker}>
+                      <td>{r.ticker}</td><td>{r.sector}</td><td>{r.beta ?? "~1.0"}</td>
+                      <td>{fmt(r.value, 0)}</td>
+                      <td className={r.est_move_pct >= 0 ? "pf-up" : "pf-down"}>{pct(r.est_move_pct)}</td>
+                      <td>{fmt(r.shocked_value, 0)}</td>
+                      <td className={r.loss >= 0 ? "pf-up" : "pf-down"}>{fmt(r.loss, 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {st.narrative && (
+            <div className="event" style={{ marginTop: 10 }}>
+              <span className="node final" /><div className="label">damage report</div>
+              <div className="verdict"><div className="thesis"><Markdown>{st.narrative}</Markdown></div></div>
+            </div>
+          )}
+          {st.rows.length > 0 && <div className="footnote" style={{ marginTop: 4 }}>Coarse factor model: real beta × market shock + fixed sector sensitivities to crude, USD/INR and rates. Not a prediction.</div>}
         </div>
       )}
 

@@ -60,7 +60,14 @@ def _clean_list(items, fields=("name", "note"), cap=_MAX_LIST) -> list:
 
 
 def build_map(ticker: str) -> tuple:
-    """(profile, ecosystem) for one NSE company. Raises on bad ticker/no data."""
+    """(profile, ecosystem) for one NSE company. Raises on bad ticker/no data.
+    Cached 12h per ticker — the relationship map doesn't change intraday, so
+    repeat requests (Ecosystem tab, chat tool, Report) cost zero LLM calls."""
+    import llm_cache
+    ck = llm_cache.key("eco-map", ticker.upper())
+    cached = llm_cache.get(ck)
+    if cached is not None:
+        return cached
     b = market.bundle(ticker)
     f = b.get("fundamentals", {})
     profile = {
@@ -118,6 +125,7 @@ def build_map(ticker: str) -> tuple:
     eco["moat"] = str(obj.get("moat", "") or "").strip()[:300]
     eco["key_risks"] = [str(x).strip()[:200] for x in (obj.get("key_risks") or [])
                         if str(x).strip()][:4]
+    llm_cache.put(ck, (profile, eco), ttl=12 * 3600)
     return profile, eco
 
 

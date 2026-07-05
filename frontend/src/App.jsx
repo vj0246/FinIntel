@@ -8,6 +8,7 @@ import Brief from "./Brief.jsx";
 import Report from "./Report.jsx";
 import Backtest from "./Backtest.jsx";
 import Chat from "./Chat.jsx";
+import RiskProfile, { getProfile } from "./RiskProfile.jsx";
 
 const VIEWS = [
   ["analyst", "📊 Analyst"],
@@ -27,6 +28,8 @@ export default function App() {
   const [view, setView] = useState("analyst");   // "analyst" | "portfolio" | "war" | "eco"
   // mobile tab state: main views + "chat"
   const [mobileTab, setMobileTab] = useState("analyst");
+  const [showProfile, setShowProfile] = useState(false);
+  const [profile, setProfile] = useState(getProfile);
 
   const showMain = mobileTab !== "chat";
   const mainView = mobileTab === "chat" ? view : mobileTab;
@@ -45,8 +48,13 @@ export default function App() {
             <button key={v} className={mainView === v ? "active" : ""} onClick={() => pick(v)}>{label}</button>
           ))}
         </nav>
-        <div className="topbar-sub">Multi-step agent · human-in-the-loop · NSE</div>
+        <button className={`profile-btn${profile ? ` rp-badge-${profile}` : ""}`}
+          onClick={() => setShowProfile(true)}
+          title="Set your risk profile — agents judge suitability against it">
+          {profile ? `🛡 ${profile}` : "🛡 Risk profile"}
+        </button>
       </header>
+      {showProfile && <RiskProfile onClose={() => setShowProfile(false)} onSaved={setProfile} />}
 
       {/* Mobile tab switcher — hidden on desktop via CSS */}
       <nav className="mobile-tabs" aria-label="Panel switcher">

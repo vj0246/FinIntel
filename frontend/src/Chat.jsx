@@ -92,7 +92,9 @@ export default function Chat() {
     setMsgs((m) => [...m, { role: "user", text: q }, { role: "assistant", steps: [], chart: null, answer: "", loading: true }]);
 
     if (esRef.current) esRef.current.close();
-    const url = `${API}/api/chat?ticker=${encodeURIComponent(ticker)}&q=${encodeURIComponent(q)}&thread=${thread.current}`;
+    let prof = "";
+    try { prof = JSON.parse(localStorage.getItem("equity-desk-risk-profile"))?.profile || ""; } catch { /* no profile set */ }
+    const url = `${API}/api/chat?ticker=${encodeURIComponent(ticker)}&q=${encodeURIComponent(q)}&thread=${thread.current}${prof ? `&profile=${prof}` : ""}`;
     const es = new EventSource(url);
     esRef.current = es;
 
