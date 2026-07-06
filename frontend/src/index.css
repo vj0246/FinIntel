@@ -2350,3 +2350,34 @@ input:focus-visible {
   color: var(--muted);
   margin: 8px 0 4px;
 }
+
+/* -------------------------------- Auth ----------------------------------- */
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.topbar-right .profile-btn { margin-left: 0; }
+
+.auth-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auth-fields input {
+  border: 1px solid var(--line-subtle);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 13.5px;
+  background: var(--glass);
+  color: var(--ink, inherit);
+}
+
+.auth-switch {
+  color: var(--indigo);
+  cursor: pointer;
+  text-decoration: underline;
+}

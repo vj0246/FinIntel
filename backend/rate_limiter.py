@@ -89,6 +89,9 @@ _lightweight = SlidingWindowLimiter(max_requests=120, window_seconds=60)
 # Upload: 8 req/min per IP (chat documents + portfolio CSVs)
 _upload = SlidingWindowLimiter(max_requests=8, window_seconds=60)
 
+# Auth: 10 req/min per IP — blocks credential stuffing, never a real user
+_auth = SlidingWindowLimiter(max_requests=10, window_seconds=60)
+
 # Endpoint path → tier limiter
 _EXPENSIVE_PATHS = {"/api/analyze", "/api/resume", "/api/chat",
                     "/api/task/start", "/api/task/step",
@@ -99,9 +102,12 @@ _HEAVY_PATHS = {"/api/report", "/api/war/start", "/api/discover", "/api/brief",
 _LIGHTWEIGHT_PATHS = {"/api/symbols", "/api/health", "/api/cache/status",
                       "/api/track-record", "/api/ledger"}
 _UPLOAD_PATHS = {"/api/upload", "/api/portfolio"}
+_AUTH_PATHS = {"/api/auth/signup", "/api/auth/login"}
 
 
 def _tier_for(path: str) -> SlidingWindowLimiter | None:
+    if path in _AUTH_PATHS:
+        return _auth
     if path in _EXPENSIVE_PATHS:
         return _expensive
     if path in _HEAVY_PATHS:

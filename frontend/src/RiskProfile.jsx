@@ -1,6 +1,19 @@
 import { useState } from "react";
+import { API } from "./api.js";
+import { getAuth } from "./AuthModal.jsx";
 
 const LS_KEY = "equity-desk-risk-profile";
+
+/* If signed in, persist the profile against the user's email (fire-and-forget). */
+function saveToServer(profile, answers) {
+  const auth = getAuth();
+  if (!auth?.token) return;
+  fetch(`${API}/api/me/profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.token}` },
+    body: JSON.stringify({ profile, answers }),
+  }).catch(() => { /* offline — localStorage copy still applies */ });
+}
 
 export function getProfile() {
   try { return JSON.parse(localStorage.getItem(LS_KEY))?.profile || ""; } catch { return ""; }
@@ -37,12 +50,14 @@ export default function RiskProfile({ onClose, onSaved }) {
 
   function save() {
     localStorage.setItem(LS_KEY, JSON.stringify({ profile, answers, saved: new Date().toISOString() }));
+    saveToServer(profile, answers);
     onSaved?.(profile);
     onClose();
   }
 
   function clear() {
     localStorage.removeItem(LS_KEY);
+    saveToServer("", null);
     onSaved?.("");
     onClose();
   }

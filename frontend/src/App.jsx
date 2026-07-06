@@ -9,6 +9,7 @@ import Report from "./Report.jsx";
 import Backtest from "./Backtest.jsx";
 import Chat from "./Chat.jsx";
 import RiskProfile, { getProfile } from "./RiskProfile.jsx";
+import AuthModal, { getAuth, signOut } from "./AuthModal.jsx";
 
 const VIEWS = [
   ["analyst", "📊 Analyst"],
@@ -30,6 +31,8 @@ export default function App() {
   const [mobileTab, setMobileTab] = useState("analyst");
   const [showProfile, setShowProfile] = useState(false);
   const [profile, setProfile] = useState(getProfile);
+  const [showAuth, setShowAuth] = useState(false);
+  const [user, setUser] = useState(() => getAuth()?.email || "");
 
   const showMain = mobileTab !== "chat";
   const mainView = mobileTab === "chat" ? view : mobileTab;
@@ -48,13 +51,28 @@ export default function App() {
             <button key={v} className={mainView === v ? "active" : ""} onClick={() => pick(v)}>{label}</button>
           ))}
         </nav>
-        <button className={`profile-btn${profile ? ` rp-badge-${profile}` : ""}`}
-          onClick={() => setShowProfile(true)}
-          title="Set your risk profile — agents judge suitability against it">
-          {profile ? `🛡 ${profile}` : "🛡 Risk profile"}
-        </button>
+        <div className="topbar-right">
+          <button className={`profile-btn${profile ? ` rp-badge-${profile}` : ""}`}
+            onClick={() => setShowProfile(true)}
+            title="Set your risk profile — agents judge suitability against it">
+            {profile ? `🛡 ${profile}` : "🛡 Risk profile"}
+          </button>
+          {user ? (
+            <button className="profile-btn" title="Signed in — click to sign out"
+              onClick={() => { signOut(); setUser(""); }}>
+              👤 {user.split("@")[0]} ✕
+            </button>
+          ) : (
+            <button className="profile-btn" onClick={() => setShowAuth(true)}
+              title="Sign in to keep your risk profile against your email">
+              👤 Sign in
+            </button>
+          )}
+        </div>
       </header>
       {showProfile && <RiskProfile onClose={() => setShowProfile(false)} onSaved={setProfile} />}
+      {showAuth && <AuthModal onClose={() => setShowAuth(false)}
+        onSignedIn={(email, prof) => { setUser(email); if (prof) setProfile(prof); }} />}
 
       {/* Mobile tab switcher — hidden on desktop via CSS */}
       <nav className="mobile-tabs" aria-label="Panel switcher">

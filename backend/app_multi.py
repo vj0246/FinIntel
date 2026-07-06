@@ -13,6 +13,7 @@ Two SSE endpoints because HITL is two-phase:
 Run:  uvicorn app_multi:app --reload --port 8000
 """
 
+import asyncio
 import json
 import os
 import uuid
@@ -434,6 +435,63 @@ async def upload_clear(thread: str):
     tid = gr.validate_uuid(thread)
     docstore.clear(tid)
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Authentication + per-user risk profile (stored against the email)
+# --------------------------------------------------------------------------- #
+from pydantic import BaseModel
+
+
+class Credentials(BaseModel):
+    email: str
+    password: str
+
+
+class ProfileUpdate(BaseModel):
+    profile: str
+    answers: list | None = None
+
+
+@app.post("/api/auth/signup")
+async def auth_signup(body: Credentials):
+    import auth
+    try:
+        return await asyncio.to_thread(auth.signup, body.email, body.password)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: Credentials):
+    import auth
+    try:
+        return await asyncio.to_thread(auth.login, body.email, body.password)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    import auth
+    try:
+        email = auth.user_from_header(request.headers.get("Authorization"))
+        user = await asyncio.to_thread(auth.get_user, email) or {}
+        return {"email": email, "profile": user.get("profile", ""), "answers": user.get("answers")}
+    except auth.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+@app.put("/api/me/profile")
+async def me_profile(body: ProfileUpdate, request: Request):
+    import auth
+    try:
+        email = auth.user_from_header(request.headers.get("Authorization"))
+    except auth.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    prof = gr.validate_profile(body.profile) if body.profile else ""
+    await asyncio.to_thread(auth.update_profile, email, prof, body.answers)
+    return {"ok": True, "email": email, "profile": prof}
 
 
 @app.get("/api/health")
