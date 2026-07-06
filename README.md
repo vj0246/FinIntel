@@ -1,133 +1,122 @@
-# Agentic Equity Desk + Chat
+# FinIntel — Agentic Equity Desk
 
-A live, agentic AI demo for the Mumbai Python Developers Group, built around one idea:
-**an LLM that can plan, use tools, and act, with a human in the loop.**
+An agentic AI platform for Indian (NSE) equity research: a fleet of specialised
+LLM agents — each grounded in live market data, each gated by a human-in-the-loop
+approval step, all under a shared SEC/SEBI-style compliance guardrail — sharing
+one desk.
 
-Two things share one screen:
+**Not investment advice.** Every generated answer carries a mandatory disclaimer;
+this is a demonstration of agentic architecture, not a trading tool.
 
-- **The Analyst Agent** (left) — a task-driven agent with **step-by-step
-  human-in-the-loop**. You give it a stock and a task (presets or free text). It
-  proposes **one step at a time** ("I'll pull news and gauge sentiment, OK?"); you
-  **Approve / Redirect / Stop**. It acts only with your sign-off, then proposes the
-  next step. Answers are grounded in fetched data, never invented.
-- **The Chat** (right side panel) — a conversational ReAct agent. Type any NSE
-  stock symbol and ask anything (sentiment, news, fundamentals, splits, a chart if
-  available). It decides which tools to call and can invoke the desk pipeline.
+## What's on the desk
 
-Agentic AI is the focus; generative AI shows up inside the tools (news sentiment,
-summaries, reports). Live data comes from yfinance (NSE); the three bundled tickers
-(RELIANCE, TCS, INFY) are cached as an offline fallback. Charts are optional — if
-price data can't be fetched, the agent keeps going with news and analysis.
+| Tab | Agent | What it does |
+|---|---|---|
+| 📊 **Analyst** | task agent + chat | Pick a stock, ask anything. The task agent proposes one step at a time (Approve / Redirect / Stop); the side chat is a 31-tool ReAct agent that answers instantly, self-reviews its own draft, and screens every reply for compliance. |
+| 🌅 **Brief** | morning brief | A saved watchlist (per-browser) plus global market cues (US/Asia/USD-INR/Brent/Gold) and Indian indices, written up as a daily brief. |
+| 🔎 **Discover** | screener | Plain-English stock screens ("IT stocks, ROE>20, PE<30, FIIs buying") parsed into a validated filter plan, swept deterministically across a curated NSE universe. |
+| 💼 **Portfolio** | risk auditor | Paste holdings or upload a broker CSV. Parallel per-stock analysis, portfolio-level risk flags, a rebalance proposal gate, a paper-trading ledger, and a scenario **stress test** (2008 crisis, COVID crash, rate shocks, or custom). |
+| ⚔️ **War Room** | orchestrated debate | A Chief Analyst plans the research and deploys specialists (quant / fundamental / news / risk) in parallel; a Bull and a Bear argue the case; a Judge rules — with your sign-off. |
+| 🕸️ **Ecosystem** | company map | Who a company competes with, sells to, buys from and partners with — competitors priced live for a real comparison table. |
+| 📑 **Report** | research report | One click orchestrates every engine (quant, financials, shareholding, ecosystem, bull/bear, desk verdict) into a single printable research note. |
+| ⏳ **Backtest** | what-if engine | Lumpsum vs SIP vs a NIFTY 50 benchmark over any window, with dividends, brokerage, step-up SIPs and XIRR/CAGR/drawdown — every number computed in Python, never by the LLM. |
+
+Sign in (email + password) to keep your **risk profile** — a five-question
+suitability questionnaire — against your account; every agent judges its
+answers against it (a stock's volatility/beta/drawdown vs. your stated
+tolerance).
 
 ## Architecture
 
 ```
-                         ┌──────────────── FRONTEND (React + Vite) ───────────────┐
-                         │  App.jsx                                                │
-                         │   ├─ Desk.jsx   left   : multi-agent + HITL (SSE)        │
-                         │   └─ Chat.jsx   right  : ReAct chat agent (SSE)          │
-                         │        └─ Chart.jsx    : recharts price chart            │
-                         └────────────────────────────┬───────────────────────────┘
-                                                       │  Server-Sent Events
-                         ┌─────────────────────────────┴──────────────────────────┐
-                         │  app_multi.py  (FastAPI)                                 │
-                         │   /api/analyze + /api/resume  -> the Desk (HITL)         │
-                         │   /api/chat                   -> the Chat agent          │
-                         └───────┬───────────────────────────────┬─────────────────┘
-                                 │                                │
-                   ┌─────────────┴──────────┐        ┌────────────┴───────────────┐
-                   │ agent_multi.py          │        │ chat_agent.py               │
-                   │  StateGraph desk:       │        │  ReAct agent (LangGraph     │
-                   │  gather→researcher→     │        │  prebuilt) with 6 tools,    │
-                   │  risk_check→synthesize  │◄───────┤  one of which RUNS THE DESK │
-                   │  + HITL via _pending    │  tool  │  (deep_desk_analysis)       │
-                   └─────────────┬───────────┘        └────────────┬───────────────┘
-                                 │                                 │
-                                 └──────────────┬──────────────────┘
-                                                │
-                                       ┌────────┴─────────┐
-                                       │ market.py         │
-                                       │ yfinance (NSE)    │
-                                       │ + cache + mock    │
-                                       │   fallback        │
-                                       └────────┬─────────┘
-                                                │
-                                          data/*.json  (RELIANCE, TCS, INFY samples)
+                    FRONTEND (React + Vite, code-split per tab)
+                              │  Server-Sent Events
+                    FastAPI (app_multi.py) — rate-limited, guarded
+     ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+   chat_agent  desk      war_room  portfolio  discover   report / brief
+   (ReAct,     (LangGraph (LangGraph (LangGraph  (screen   / backtest /
+   31 tools)   StateGraph, StateGraph, StateGraph universe) ecosystem /
+               interrupt) interrupt) interrupt)            stress
+     └──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
+                              │
+              market.py / quant.py / screener.py / nse.py
+              (yfinance + Screener.in + NSE, cached, sample fallback)
+                              │
+                    guardrails.py (compliance pipeline)
+                    groq_pool.py  (multi-key failover)
+                    llm_cache.py  (TTL cache on repeat LLM calls)
+                    session_registry.py (bounded per-thread eviction)
+                    auth.py       (PBKDF2 + signed tokens, Supabase-backed)
 ```
 
-## Backend files
+**Human-in-the-loop is LangGraph-native.** The four interactive agents (desk,
+war room, portfolio auditor, task agent) are each a single checkpointed
+`StateGraph`. The approval gate calls LangGraph's `interrupt()` — the graph
+literally pauses and checkpoints itself; your approve/reject/revise resumes it
+with `Command(resume=...)`. No hand-rolled pending-request dictionaries.
+
+**Compliance pipeline** on every LLM output: hardcoded forbidden-phrase
+neutralisation → semantic LLM screen → grounded rewrite (never invents facts,
+deletes what it can't fix) → PII scrub → mandatory SEBI-style disclaimer.
+
+**Deterministic math everywhere it matters.** Quant metrics (volatility,
+Sharpe, beta, RSI, drawdown), portfolio weights/concentration, stress-test
+shocks, and backtest CAGR/XIRR are all computed in Python — the LLM only
+interprets and narrates, it never does arithmetic.
+
+## Backend module map
 
 ```
 backend/
-  market.py        yfinance NSE data layer: quote, price/chart, fundamentals,
-                   news, splits. Bundle cached 5 min; the live spot quote has its
-                   own ~20s cache so the price stays current while markets are open.
-                   Falls back to data/*.json for the sample tickers if live fails.
-  companies.py     NSE company directory (name + ticker) behind the search-bar
-                   autocomplete (/api/symbols).
-  docstore.py      uploaded-document store: extracts text from PDF (pypdf) / Word
-                   (python-docx) / text, chunks it, and does keyword retrieval for
-                   the chat's ask_document tool. In-memory, keyed by chat thread.
-  agent_task.py    the ANALYST: task-driven agent with step-by-step HITL. Proposes
-                   one step, waits for Approve / Redirect / Stop, executes, repeats.
-                   Grounded in real data; never invents numbers.
-  chat_agent.py    the CHAT: a LangGraph prebuilt ReAct agent with six tools,
-                   tightened to answer only from tool results.
-  agent_multi.py   older multi-agent desk pipeline (kept; chat can call it).
-  app_multi.py     FastAPI. SSE endpoints:
-                     /api/task/start, /api/task/step   -> Analyst (step HITL)
-                     /api/chat                          -> Chat
-                     /api/symbols                       -> search autocomplete
-                     /api/upload (POST/DELETE)          -> attach/clear a document
-                     /api/analyze, /api/resume          -> legacy desk
-  tools.py         loads backend/.env (dotenv) + original mock tools/schemas.
-  data/*.json      sample data + offline fallback.
+  app_multi.py       FastAPI app: every SSE/REST endpoint, rate-limited & guarded
+  guardrails.py      input validation, prompt-injection screen, compliance pipeline
+  groq_pool.py       Groq key pool with automatic per-key failover
+  llm_cache.py       TTL cache for repeat-invariant LLM calls (compliance, ecosystem, beta)
+  session_registry.py bounded eviction for all per-thread in-memory state
+  auth.py            email/password auth, PBKDF2 hashing, signed tokens, Supabase storage
+
+  chat_agent.py      ReAct chat agent — 31 tools, self-review, compliance
+  agent_multi.py     the Desk: gather→researcher→risk→synthesize→reflect→(HITL gate)
+  agent_task.py      step-by-step task agent (propose→approve/redirect/stop loop)
+  war_room.py        Chief Analyst → parallel specialists → bull/bear debate → judge
+  portfolio.py       broker-CSV/paste parsing, parallel per-stock audit, rebalance gate
+  stress.py          deterministic factor-model portfolio stress test
+  discover.py        NL query → validated filters → deterministic universe sweep
+  brief.py           watchlist + global/Indian market cues → morning brief
+  report.py          orchestrates every engine into one research report
+  ecosystem.py       LLM relationship map + live-priced competitor table
+  backtest.py        lumpsum/SIP backtest engine (CAGR, XIRR, drawdown, benchmark)
+  verdict_log.py     every approved verdict logged and later re-scored (track record + P&L ledger)
+
+  market.py          yfinance NSE data layer (quote/fundamentals/financials), cached
+  quant.py           volatility, Sharpe, beta, RSI, drawdown — computed from real prices
+  screener.py        Screener.in scrape: consolidated ratios, quarterly/annual/shareholding
+  nse.py             NSE India data (sector P/E, 52-week range) — best-effort
+  companies.py       NSE ticker/name directory for the search-bar autocomplete
+  docstore.py        uploaded-document store (PDF/Word/text) for chat Q&A
+  seed_data.py        offline sample data so the demo always works without live feeds
+  rate_limiter.py     per-tier sliding-window rate limits
+  graph_stream.py      bridges LangGraph's sync interrupt-aware stream into async SSE
 ```
 
-## Analyst step-by-step HITL
-
-```
-you: stock + task ─▶ agent proposes step ─▶ [Approve / Redirect / Stop]
-                            ▲                          │
-                            └──── runs step, then ◀────┘  (until you finalise)
-```
-Endpoints: `/api/task/start?ticker=&task=&thread=` then
-`/api/task/step?thread=&decision=approve|stop|redirect:<text>`.
-
-## Chat agent tools
-
-| Tool | What it does |
-|---|---|
-| get_quote | latest price + day change |
-| get_price_chart | 6-month series, rendered as a chart in the UI |
-| get_fundamentals | PE, market cap, margins, ROE |
-| analyze_news_sentiment | pulls news, an LLM scores the mood (GenAI in a tool) |
-| get_splits | historical stock splits / corporate actions |
-| ask_document | answers from a PDF/Word doc the user uploaded to the chat (e.g. financial statements) |
-| deep_desk_analysis | runs the multi-agent Desk and returns its verdict + action |
-
-`get_quote` now returns the **live intraday price** (real-time spot via yfinance
-`fast_info`/1-min bar), today's % move vs the previous close, and the market
-state (REGULAR/CLOSED/PRE/POST) — not the last daily close.
-
-## Run
+## Run locally
 
 ```bash
 cd backend
 python -m venv .mumpy
-.mumpy\Scripts\Activate.ps1            # Windows PowerShell
-# (mac/linux: source .mumpy/bin/activate)
-pip install -r requirements.txt -r requirements-langgraph.txt
+.mumpy\Scripts\Activate.ps1        # Windows PowerShell; mac/linux: source .mumpy/bin/activate
+pip install -r requirements.txt
 
-# create backend/.env  (auto-loaded by tools.py):
-#   GROQ_API_KEY=gsk_xxx
-#   LANGCHAIN_API_KEY=ls__xxx          (optional, LangSmith)
-#   LANGCHAIN_TRACING_V2=true
-#   LANGCHAIN_PROJECT=mumpy-agent
+# backend/.env
+#   GROQ_API_KEY=gsk_xxx[,gsk_yyy,...]     comma-separated keys = automatic failover
+#   AUTH_SECRET=<any long random string>   keeps sign-ins valid across restarts
+#   SUPABASE_URL=...                       optional — persists accounts across redeploys
+#   SUPABASE_SERVICE_KEY=...               optional — falls back to a local users.json
+#   LANGCHAIN_TRACING_V2=false             optional LangSmith tracing
 
 uvicorn app_multi:app --reload --port 8000
 ```
-Health: http://localhost:8000/api/health
+Health check: http://localhost:8000/api/health
 
 ```bash
 cd frontend
@@ -137,20 +126,11 @@ npm run dev            # http://localhost:5173
 
 ## Notes
 
-- **NSE symbols**: type any, e.g. RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, SBIN,
-  TATAMOTORS, BHARTIARTL, ITC. market.py adds the ".NS" suffix for Yahoo.
-- **Live vs Sample**: every chart shows a badge. LIVE = fresh yfinance data;
-  SAMPLE = bundled offline data used when the live feed is unavailable. The nine
-  seeded symbols above always work offline; others need a live fetch.
-- **yfinance can be blocked / rate-limited**. If live fails, seeded symbols fall
-  back to clearly-labelled sample data; unknown symbols return a clean "couldn't
-  fetch" message instead of inventing numbers. curl_cffi is included because recent
-  yfinance needs it. If live still fails, use a network that isn't blocking Yahoo,
-  or rely on the seeded symbols for the talk.
-- The side **Chat** shares the stock symbol with the **Analyst** (change it in
-  either; the other follows) until you type a different one in the chat.
-- **Not investment advice.** Teaching demo of agentic patterns.
-
-## Speech + slides
-See SPEECH.md (10-minute script) and MumPy_Talk.pptx (4 slides). MULTI_AGENT.md
-has the Desk code walkthrough.
+- **NSE symbols**: type any ticker (RELIANCE, TCS, INFY, HDFCBANK, …) — the
+  autocomplete and every agent normalise it. A handful of seed tickers work
+  fully offline as a sample-data fallback if live feeds are unreachable.
+- **Live vs sample data** is always labelled in the UI — sample data is never
+  silently presented as live.
+- **Rate limits** are light-touch by design: every action is comfortably
+  runnable several times a minute; only sustained hammering is blocked.
+- See `DEPLOY.md` for the Render + Vercel deployment guide.

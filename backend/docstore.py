@@ -19,8 +19,11 @@ chat's thread id (one active document per chat — a new upload replaces it).
 import io
 import re
 
+import session_registry
+
 # thread_id -> {"name": str, "text": str, "chunks": [str, ...], "chars": int}
 _DOCS: dict = {}
+session_registry.register_evictor(lambda t: _DOCS.pop(t, None))
 
 _MAX_CHARS = 400_000          # guard against an enormous paste/upload
 _CHUNK = 1100                 # chunk size (chars); financial tables stay mostly intact
@@ -89,6 +92,7 @@ def _chunk(text: str) -> list:
 def add_document(thread_id: str, filename: str, text: str) -> dict:
     chunks = _chunk(text)
     _DOCS[thread_id] = {"name": filename, "text": text, "chunks": chunks, "chars": len(text)}
+    session_registry.touch(thread_id)
     return {"name": filename, "chars": len(text), "chunks": len(chunks)}
 
 

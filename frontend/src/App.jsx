@@ -1,15 +1,18 @@
-import { useState } from "react";
+import { useState, Suspense, lazy } from "react";
 import Analyst from "./Analyst.jsx";
-import Portfolio from "./Portfolio.jsx";
-import WarRoom from "./WarRoom.jsx";
-import Ecosystem from "./Ecosystem.jsx";
-import Discover from "./Discover.jsx";
-import Brief from "./Brief.jsx";
-import Report from "./Report.jsx";
-import Backtest from "./Backtest.jsx";
 import Chat from "./Chat.jsx";
 import RiskProfile, { getProfile } from "./RiskProfile.jsx";
 import AuthModal, { getAuth, signOut } from "./AuthModal.jsx";
+
+// Code-split the less-visited tabs: only the Analyst (default) + Chat load
+// on first paint; the rest fetch on demand when a tab is first opened.
+const Portfolio = lazy(() => import("./Portfolio.jsx"));
+const WarRoom = lazy(() => import("./WarRoom.jsx"));
+const Ecosystem = lazy(() => import("./Ecosystem.jsx"));
+const Discover = lazy(() => import("./Discover.jsx"));
+const Brief = lazy(() => import("./Brief.jsx"));
+const Report = lazy(() => import("./Report.jsx"));
+const Backtest = lazy(() => import("./Backtest.jsx"));
 
 const VIEWS = [
   ["analyst", "📊 Analyst"],
@@ -88,10 +91,12 @@ export default function App() {
 
       <div className="app">
         <main className={`main${!showMain ? " tab-hidden" : ""}`}>
-          {mainView === "portfolio" ? <Portfolio /> : mainView === "war" ? <WarRoom /> :
-           mainView === "eco" ? <Ecosystem /> : mainView === "discover" ? <Discover /> :
-           mainView === "brief" ? <Brief /> : mainView === "report" ? <Report /> :
-           mainView === "backtest" ? <Backtest /> : <Analyst ticker={ticker} setTicker={setTicker} />}
+          <Suspense fallback={<div className="view-loading">Loading…</div>}>
+            {mainView === "portfolio" ? <Portfolio /> : mainView === "war" ? <WarRoom /> :
+             mainView === "eco" ? <Ecosystem /> : mainView === "discover" ? <Discover /> :
+             mainView === "brief" ? <Brief /> : mainView === "report" ? <Report /> :
+             mainView === "backtest" ? <Backtest /> : <Analyst ticker={ticker} setTicker={setTicker} />}
+          </Suspense>
         </main>
         <aside className={`side${mobileTab !== "chat" ? " tab-hidden" : ""}`}>
           <Chat ticker={ticker} setTicker={setTicker} />

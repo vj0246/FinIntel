@@ -35,6 +35,7 @@ import groq_pool
 import market
 import quant
 import guardrails as gr
+import session_registry
 from graph_stream import astream_updates, interrupt_payload, has_pending_interrupt
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -299,6 +300,7 @@ def _build():
 
 
 GRAPH = _build()
+session_registry.register_evictor(lambda t: GRAPH.checkpointer.delete_thread(t))
 
 
 def _config(thread_id: str) -> dict:
@@ -326,6 +328,7 @@ def _events_from_update(update: dict, thread_id: str):
 # Public streaming API
 # --------------------------------------------------------------------------- #
 async def start(question: str, default_ticker: str, thread_id: str):
+    session_registry.touch(thread_id)
     _t0 = asyncio.get_event_loop().time()
 
     plan = await asyncio.to_thread(_plan, question, default_ticker)

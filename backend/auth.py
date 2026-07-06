@@ -35,6 +35,14 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
 
 _SECRET = os.environ.get("AUTH_SECRET") or secrets.token_hex(32)
 
+# Fixed dummy salt/hash used to equalise timing when an email has no account —
+# without this, `login()` returns fast for unknown emails (no PBKDF2 call) but
+# slow for known ones (210k-iteration hash), letting an attacker enumerate
+# registered emails purely from response time even though the error text is
+# identical either way.
+_DUMMY_SALT = hashlib.sha256(b"finintel-dummy-salt").digest()[:16]
+_DUMMY_HASH = hashlib.pbkdf2_hmac("sha256", b"", _DUMMY_SALT, _ITERATIONS).hex()
+
 _SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
 _SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or ""
 _LOCAL_PATH = os.path.join(os.path.dirname(__file__), "users.json")
@@ -119,9 +127,13 @@ def _local_save(users: dict):
 
 def get_user(email: str) -> dict | None:
     email = email.lower()
+    if not _EMAIL_RE.match(email) or len(email) > 254:
+        return None
     if backend_name() == "supabase":
         from urllib.parse import quote
-        rows = _sb_request("GET", f"finintel_users?email=eq.{quote(email)}&select=*")
+        # safe="" escapes every reserved character (incl. '/'), so the value
+        # can never be mistaken for extra PostgREST filter/query syntax.
+        rows = _sb_request("GET", f"finintel_users?email=eq.{quote(email, safe='')}&select=*")
         return rows[0] if rows else None
     return _local_load().get(email)
 
@@ -147,7 +159,7 @@ def update_profile(email: str, profile: str, answers=None):
              "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     if backend_name() == "supabase":
         from urllib.parse import quote
-        _sb_request("PATCH", f"finintel_users?email=eq.{quote(email)}", patch)
+        _sb_request("PATCH", f"finintel_users?email=eq.{quote(email, safe='')}", patch)
         return
     with _LOCK:
         users = _local_load()
@@ -178,9 +190,18 @@ def signup(email: str, password: str) -> dict:
 
 def login(email: str, password: str) -> dict:
     email = (email or "").strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise AuthError("Invalid email or password.")
     user = get_user(email)
-    # Same error for unknown email and wrong password — no account enumeration.
-    if not user or not _verify_password(password or "", user["salt"], user["pw_hash"]):
+    # Always run the (expensive) hash comparison, even for an unknown email,
+    # against a fixed dummy salt/hash — so response time can't be used to
+    # enumerate which emails have accounts. Same error either way.
+    if user:
+        ok = _verify_password(password or "", user["salt"], user["pw_hash"])
+    else:
+        _verify_password(password or "", _DUMMY_SALT.hex(), _DUMMY_HASH)
+        ok = False
+    if not ok:
         raise AuthError("Invalid email or password.")
     return {"token": issue_token(email), "email": email,
             "profile": user.get("profile", ""), "answers": user.get("answers")}

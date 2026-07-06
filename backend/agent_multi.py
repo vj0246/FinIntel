@@ -35,6 +35,7 @@ import groq_pool
 
 import market
 import guardrails as gr
+import session_registry
 from graph_stream import astream_updates, interrupt_payload, has_pending_interrupt
 
 # Load backend/.env so LangSmith vars are present (GROQ keys are loaded by groq_pool).
@@ -191,6 +192,7 @@ def _build():
 
 
 GRAPH = _build()
+session_registry.register_evictor(lambda t: GRAPH.checkpointer.delete_thread(t))
 
 
 # --------------------------------------------------------------------------- #
@@ -231,6 +233,7 @@ def _config(thread_id: str) -> dict:
 # --------------------------------------------------------------------------- #
 async def start_run(ticker: str, thread_id: str):
     """Run the graph until its interrupt() gate emits the approval card."""
+    session_registry.touch(thread_id)
     _start = asyncio.get_event_loop().time()
     _TIMEOUT = 120
     try:

@@ -31,6 +31,7 @@ import groq_pool
 
 import market
 import guardrails as gr
+import session_registry
 from graph_stream import astream_updates, interrupt_payload, has_pending_interrupt
 
 # Load backend/.env so LangSmith vars are present (GROQ keys are loaded by groq_pool).
@@ -556,6 +557,7 @@ def _build():
 
 
 GRAPH = _build()
+session_registry.register_evictor(lambda t: GRAPH.checkpointer.delete_thread(f"task-{t}"))
 
 
 def _config(thread_id: str) -> dict:
@@ -584,6 +586,7 @@ def _events_from_update(update: dict, thread_id: str):
 # Public streaming API
 # --------------------------------------------------------------------------- #
 async def start_task(ticker: str, task: str, thread_id: str):
+    session_registry.touch(thread_id)
     tk = ticker.upper()
     # preflight: make sure we can get data at all before proposing steps
     try:

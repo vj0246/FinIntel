@@ -2381,3 +2381,11 @@ input:focus-visible {
   cursor: pointer;
   text-decoration: underline;
 }
+
+.view-loading {
+  padding: 60px 0;
+  text-align: center;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}

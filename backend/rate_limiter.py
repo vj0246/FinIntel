@@ -140,9 +140,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """Applies global + per-tier rate limiting based on client IP."""
 
     async def dispatch(self, request: Request, call_next):
-        # Determine client IP (respect X-Forwarded-For behind a proxy)
+        # Determine client IP behind Render's proxy. Render APPENDS the real
+        # client IP as the LAST hop of X-Forwarded-For; the FIRST hop is
+        # whatever the client itself sent and is fully attacker-controlled
+        # (a request with a spoofed leading X-Forwarded-For would otherwise
+        # get a fresh rate-limit bucket on every call). Trust the last hop.
         forwarded = request.headers.get("x-forwarded-for")
-        client_ip = forwarded.split(",")[0].strip() if forwarded else (
+        client_ip = forwarded.split(",")[-1].strip() if forwarded else (
             request.client.host if request.client else "unknown"
         )
         path = request.url.path

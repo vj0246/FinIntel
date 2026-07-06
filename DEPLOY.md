@@ -19,14 +19,21 @@ The repo already contains everything needed: `render.yaml` (backend blueprint),
 
 ## 1. Backend → Render (do this first; you need its URL for step 2)
 
-1. Push this repo to GitHub (already at `vj0246/Mumpy-Demo`).
+1. Push this repo to GitHub (already at `vj0246/FinIntel`).
 2. Go to <https://dashboard.render.com> → **New** → **Blueprint**.
-3. Select the **Mumpy-Demo** repo. Render reads `render.yaml` and proposes a web
+3. Select the **FinIntel** repo. Render reads `render.yaml` and proposes a web
    service called **mumpy-demo-api**.
-4. It will ask for the **GROQ_API_KEY** env var — paste your `gsk_...` key.
-   (It's marked `sync: false`, so it's never stored in git.)
-5. Click **Apply**. First build takes a few minutes.
-6. When it's live, copy the URL, e.g. `https://mumpy-demo-api.onrender.com`.
+4. It will ask for the **GROQ_API_KEY** env var — paste your `gsk_...` key
+   (comma-separate multiple keys for automatic failover). It's marked
+   `sync: false`, so it's never stored in git.
+5. Also set, for persistent accounts + risk profiles:
+   - `AUTH_SECRET` — any long random string (without it, sign-ins are
+     invalidated on every restart)
+   - `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` — from a Supabase project's
+     Settings → API (service_role key, never the anon key); without these,
+     accounts fall back to a local file that's wiped on every redeploy
+6. Click **Apply**. First build takes a few minutes.
+7. When it's live, copy the URL, e.g. `https://mumpy-demo-api.onrender.com`.
    Check `https://<that-url>/api/health` → should return `{"ok": true, ...}`.
 
 **Free-tier note:** the service **sleeps after ~15 min idle**; the next request
@@ -37,7 +44,7 @@ Render plan or ping `/api/health` every few minutes.
 
 ## 2. Frontend → Vercel
 
-1. Go to <https://vercel.com/new> → import the **Mumpy-Demo** repo.
+1. Go to <https://vercel.com/new> → import the **FinIntel** repo.
 2. **Root Directory** → set to **`frontend`** (important — the repo root has both
    folders). Vercel auto-detects Vite (build `npm run build`, output `dist`).
 3. **Environment Variables** → add:

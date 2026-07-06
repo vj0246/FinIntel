@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from "react";
-import Chart from "./Chart.jsx";
+import { useState, useRef, useEffect, Suspense, lazy } from "react";
 import TickerSearch from "./TickerSearch.jsx";
 import Markdown from "./Markdown.jsx";
 import { API } from "./api.js";
+
+const Chart = lazy(() => import("./Chart.jsx"));
 
 const SUGGEST = [
   "Compare this stock's quarterly results with its top competitors",
@@ -160,7 +161,11 @@ export default function Chat() {
                   {m.steps.map((s, j) => <span key={j} className="step-chip">{TOOL_LABEL[s.name] || s.name}</span>)}
                 </div>
               )}
-              {m.chart && <Chart series={m.chart.series} ticker={m.chart.ticker} changePct={m.chart.changePct} />}
+              {m.chart && (
+                <Suspense fallback={<div className="view-loading">Loading chart…</div>}>
+                  <Chart series={m.chart.series} ticker={m.chart.ticker} changePct={m.chart.changePct} />
+                </Suspense>
+              )}
               {m.answer && <Markdown>{m.answer}</Markdown>}
               {m.loading && !m.answer && <div className="dots"><i /><i /><i /></div>}
             </div>

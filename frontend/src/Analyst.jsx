@@ -1,8 +1,11 @@
-import { useState, useRef, useEffect } from "react";
-import Chart from "./Chart.jsx";
+import { useState, useRef, useEffect, Suspense, lazy } from "react";
 import TickerSearch from "./TickerSearch.jsx";
 import Markdown from "./Markdown.jsx";
 import { API } from "./api.js";
+
+// recharts is the single heaviest dependency in the bundle; defer it until a
+// chart actually needs to render instead of paying its parse cost up front.
+const Chart = lazy(() => import("./Chart.jsx"));
 
 const PRESETS = [
   ["📊 Fundamental analysis", "Do a fundamental analysis: financial health, valuation and quality verdict."],
@@ -125,7 +128,11 @@ export default function Analyst() {
           ) : it.kind === "step" ? (
             <div key={i} className="event" style={{ "--c": "var(--think)" }}><span className="node role" /><div className="label" style={{ color: "var(--think)" }}>{TOOL_LABEL[it.tool] || it.tool}</div><div className="plan-text" style={{ fontStyle: "normal" }}><Markdown>{it.text}</Markdown></div></div>
           ) : it.kind === "chart" ? (
-            <div key={i} className="event"><span className="node role" style={{ "--c": "var(--signal)" }} /><Chart series={it.series} ticker={it.ticker} changePct={it.changePct} /></div>
+            <div key={i} className="event"><span className="node role" style={{ "--c": "var(--signal)" }} />
+              <Suspense fallback={<div className="view-loading">Loading chart…</div>}>
+                <Chart series={it.series} ticker={it.ticker} changePct={it.changePct} />
+              </Suspense>
+            </div>
           ) : it.kind === "final" ? (
             <div key={i} className="event"><span className="node final" /><div className="label">final report</div><div className="verdict"><div className="thesis"><Markdown>{it.text}</Markdown></div></div></div>
           ) : (

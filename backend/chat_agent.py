@@ -26,6 +26,7 @@ import groq_pool
 import market
 import docstore
 import guardrails as gr
+import session_registry
 
 # Load backend/.env so LangSmith vars are present (GROQ keys are loaded by groq_pool).
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -41,6 +42,7 @@ _ACTIVE = {"thread": None}
 MODEL = "openai/gpt-oss-120b"
 _llm = groq_pool.create_llm(MODEL, temperature=0.3)
 _history: dict = {}
+session_registry.register_evictor(lambda t: _history.pop(t, None))
 
 
 def _interpret(instruction: str, data) -> str:
@@ -303,6 +305,7 @@ def compare_quarterly(tickers: str) -> str:
     each company's last two quarters — revenue, net profit, operating income (₹ crore)
     and EPS — for a side-by-side comparison of peers/competitors."""
     syms = [t.strip().upper() for t in re.split(r"[,\s]+", tickers) if t.strip()]
+    syms = [s for s in syms if re.match(r"^[A-Z0-9&\-]{1,20}$", s)]   # whitelist before any outbound fetch
     syms = list(dict.fromkeys(syms))[:6]            # dedupe + cap
     out = {}
     for sym in syms:
@@ -380,6 +383,7 @@ def compare_fundamentals(tickers: str) -> str:
     market cap (₹ crore), dividend yield, debt/equity and net margin — the right
     tool for 'which is cheaper / better quality', peer valuation comparisons."""
     syms = [t.strip().upper() for t in re.split(r"[,\s]+", tickers) if t.strip()]
+    syms = [s for s in syms if re.match(r"^[A-Z0-9&\-]{1,20}$", s)]   # whitelist before any outbound fetch
     syms = list(dict.fromkeys(syms))[:6]
     out = {}
     for sym in syms:
@@ -530,6 +534,7 @@ _PROFILE_NOTES = {
 
 async def run_chat(ticker: str, question: str, thread_id: str, profile: str = ""):
     _ACTIVE["thread"] = thread_id           # so ask_document finds this chat's upload
+    session_registry.touch(thread_id)
     history = _history.get(thread_id, [])
     doc_note = ""
     if docstore.has_document(thread_id):

@@ -1,5 +1,5 @@
 # Render Blueprint — deploys the FastAPI backend as one always-on web service.
-# Use it: Render Dashboard -> New -> Blueprint -> pick the Mumpy-Demo repo.
+# Use it: Render Dashboard -> New -> Blueprint -> pick the FinIntel repo.
 # It reads this file, creates the service, and asks you to paste GROQ_API_KEY.
 #
 # (The React frontend is deployed separately on Vercel — see DEPLOY.md.)

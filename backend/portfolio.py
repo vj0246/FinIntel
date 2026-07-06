@@ -37,6 +37,7 @@ import groq_pool
 
 import market
 import guardrails as gr
+import session_registry
 from graph_stream import astream_updates, interrupt_payload, has_pending_interrupt
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -129,6 +130,7 @@ def parse_holdings(text: str) -> tuple[list[dict], list[str]]:
 
 def set_holdings(thread_id: str, holdings: list[dict]):
     _sessions[thread_id] = {"holdings": holdings, "rows": [], "metrics": {}, "pending": None}
+    session_registry.touch(thread_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -364,6 +366,8 @@ def _build():
 
 
 GRAPH = _build()
+session_registry.register_evictor(lambda t: _sessions.pop(t, None))
+session_registry.register_evictor(lambda t: GRAPH.checkpointer.delete_thread(f"pf-{t}"))
 
 
 def _config(thread_id: str) -> dict:
