@@ -228,11 +228,15 @@ def append_disclaimer(text: str) -> str:
 _compliance_llm = None
 
 def _get_compliance_llm():
-    """Lazy singleton — a small fast model dedicated to compliance screening."""
+    """Lazy singleton — a small fast model dedicated to compliance screening.
+
+    gpt-oss-20b: 1000 t/s on Groq (2x llama-3.1-8b) and on Groq's reasoning /
+    function-calling recommended lists, so verdict JSON and rewrites are both
+    faster and more reliable than the 8b it replaced."""
     global _compliance_llm
     if _compliance_llm is None:
         import groq_pool
-        _compliance_llm = groq_pool.create_llm("llama-3.1-8b-instant", temperature=0.0)
+        _compliance_llm = groq_pool.create_llm("openai/gpt-oss-20b", temperature=0.0)
     return _compliance_llm
 
 

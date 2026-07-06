@@ -32,8 +32,10 @@ import market
 import screener
 import guardrails as gr
 
-MODEL = "openai/gpt-oss-120b"
+MODEL = "openai/gpt-oss-120b"          # commentary — needs the strongest reasoning
+PARSE_MODEL = "openai/gpt-oss-20b"     # query -> JSON filters: pure structured task, 1000 t/s
 _llm = None
+_parse_llm = None
 
 # Curated universe: NIFTY 50 + prominent next-50/mid names, tagged by sector.
 UNIVERSE = [
@@ -98,6 +100,13 @@ def _get_llm():
     if _llm is None:
         _llm = groq_pool.create_llm(MODEL, temperature=0)
     return _llm
+
+
+def _get_parse_llm():
+    global _parse_llm
+    if _parse_llm is None:
+        _parse_llm = groq_pool.create_llm(PARSE_MODEL, temperature=0)
+    return _parse_llm
 
 
 # --------------------------------------------------------------------------- #
@@ -182,7 +191,7 @@ def parse_query(query: str) -> dict:
     """{"filters":[{metric,op,value}], "sectors":[], "sort_by","sort_dir","limit"}
     Every metric/op is validated against the whitelist; anything else is dropped."""
     sectors = sorted({s for _, s in UNIVERSE})
-    raw = _get_llm().invoke([HumanMessage(content=(
+    raw = _get_parse_llm().invoke([HumanMessage(content=(
         "Convert this stock-screening request into JSON filters.\n"
         f"REQUEST: {query}\n\n"
         f"Allowed metrics: {sorted(ALL_METRICS)}\n"
