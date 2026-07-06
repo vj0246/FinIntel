@@ -14,19 +14,24 @@ Nothing happens without your approval. The agent only ever proposes the *next*
 step; you stay in control the whole way. Answers are grounded in fetched data,
 not invented — if data can't be fetched, it says so and keeps going.
 
-No interrupt() magic: each step is a plain LLM "what next" call, gated by an
-HTTP round-trip. Session state lives in _sessions keyed by thread id.
+HITL is LangGraph-native: each step pauses at an interrupt() gate inside a
+checkpointed StateGraph and resumes with Command(resume=<decision>).
 """
 
 import json
 import os
+from typing import TypedDict, Optional
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import interrupt, Command
 import groq_pool
 
 import market
 import guardrails as gr
+from graph_stream import astream_updates, interrupt_payload, has_pending_interrupt
 
 # Load backend/.env so LangSmith vars are present (GROQ keys are loaded by groq_pool).
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
@@ -35,8 +40,6 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 # Set GROQ_API_KEY=key1,key2,key3 for failover across multiple keys.
 MODEL = "openai/gpt-oss-120b"
 _llm = groq_pool.create_llm(MODEL, temperature=0.3)
-
-_sessions: dict = {}   # thread_id -> session dict
 
 # Tools the agent may propose. Keep names human-readable for the approval card.
 # Raw-data tools fetch numbers; analysis tools interpret them (grounded, never invented).
@@ -463,6 +466,121 @@ def _reflect_report(sess: dict, ctx: str, draft: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Step-loop graph — LangGraph-native HITL. Every proposed step pauses at the
+# interrupt() gate; the human's Command(resume=...) decides: approve runs the
+# tool, "redirect:<instruction>" re-proposes, "stop" writes the report.
+#
+#   START → propose → gate ──approve──→ execute ──→ propose (loop)
+#                       │──redirect───→ propose (loop)
+#                       └──stop/finish→ report → END
+# --------------------------------------------------------------------------- #
+class TaskState(TypedDict):
+    ticker: str
+    task: str
+    context: list
+    proposal: Optional[dict]
+    decision: Optional[str]
+    redirects: int
+    last_result: Optional[str]
+    last_chart: Optional[dict]
+    outcome: Optional[str]
+
+
+def _node_propose(state: TaskState):
+    redirects = state.get("redirects", 0)
+    redirect = ""
+    d = state.get("decision") or ""
+    if d.startswith("redirect:"):
+        redirect = d[len("redirect:"):].strip()
+        redirects += 1
+        if redirects > MAX_REDIRECTS:
+            return {"proposal": {"tool": "finish",
+                                 "summary": "Redirect limit reached — approve to get the final report."},
+                    "decision": None, "redirects": redirects}
+    prop = _propose(state, redirect=redirect)
+    return {"proposal": prop, "decision": None, "redirects": redirects,
+            "last_result": None, "last_chart": None}
+
+
+def _node_gate(state: TaskState):
+    prop = state["proposal"]
+    decision = interrupt({"tool": prop["tool"], "summary": prop["summary"]})
+    return {"decision": str(decision or "").strip()}
+
+
+def _route(state: TaskState) -> str:
+    d = state.get("decision") or ""
+    if d == "stop":
+        return "report"
+    if d.startswith("redirect:"):
+        return "propose"
+    # approve
+    if (state.get("proposal") or {}).get("tool") == "finish":
+        return "report"
+    return "execute"
+
+
+def _node_execute(state: TaskState):
+    prop = state["proposal"]
+    result, chart = _execute(prop["tool"], state["ticker"])
+    # Regex compliance screen on each step; the disclaimer goes on the final report only
+    result = gr.enforce_compliance(result, semantic=False, disclaimer=False)
+    if prop["tool"] == "verdict":
+        # Track record: log the stance at today's price so it can be scored later
+        try:
+            import verdict_log
+            verdict_log.log_verdict(state["ticker"], verdict_log.extract_verdict(result),
+                                    market.quote(state["ticker"]).get("price"), source="task")
+        except Exception:
+            pass
+    return {"context": state["context"] + [{"tool": prop["tool"], "result": result}],
+            "last_result": result, "last_chart": chart, "decision": None}
+
+
+def _node_report(state: TaskState):
+    return {"outcome": _report(state)}
+
+
+def _build():
+    g = StateGraph(TaskState)
+    for name, fn in [("propose", _node_propose), ("gate", _node_gate),
+                     ("execute", _node_execute), ("report", _node_report)]:
+        g.add_node(name, fn)
+    g.add_edge(START, "propose")
+    g.add_edge("propose", "gate")
+    g.add_conditional_edges("gate", _route,
+                            {"execute": "execute", "propose": "propose", "report": "report"})
+    g.add_edge("execute", "propose")
+    g.add_edge("report", END)
+    return g.compile(checkpointer=MemorySaver())
+
+
+GRAPH = _build()
+
+
+def _config(thread_id: str) -> dict:
+    return {"configurable": {"thread_id": f"task-{thread_id}"}}
+
+
+def _events_from_update(update: dict, thread_id: str):
+    payload = interrupt_payload(update)
+    if payload is not None:
+        yield {"type": "propose", "tool": payload.get("tool", ""),
+               "summary": payload.get("summary", ""), "thread_id": thread_id}
+        return
+    for node, delta in update.items():
+        delta = delta or {}
+        if node == "execute":
+            if delta.get("last_chart"):
+                yield {"type": "chart", **delta["last_chart"]}
+            if delta.get("last_result"):
+                tool = (delta.get("context") or [{}])[-1].get("tool", "")
+                yield {"type": "step_result", "tool": tool, "text": delta["last_result"]}
+        elif node == "report":
+            yield {"type": "final", "text": delta.get("outcome", "")}
+
+
+# --------------------------------------------------------------------------- #
 # Public streaming API
 # --------------------------------------------------------------------------- #
 async def start_task(ticker: str, task: str, thread_id: str):
@@ -475,68 +593,27 @@ async def start_task(ticker: str, task: str, thread_id: str):
         yield {"type": "final", "text": f"Couldn't start: {e}"}
         return
 
-    sess = {"ticker": tk, "task": task, "context": [], "pending": None, "source": source, "redirects": 0}
-    _sessions[thread_id] = sess
     src_note = "live market data" if source == "live" else "sample data (live feed unavailable)"
     yield {"type": "intro", "text": f"Working on: \"{task}\" for {tk}. Using {src_note}. I'll propose each step for your approval."}
-    prop = _propose(sess)
-    sess["pending"] = prop
-    yield {"type": "propose", "tool": prop["tool"], "summary": prop["summary"], "thread_id": thread_id}
+    init: TaskState = {"ticker": tk, "task": task, "context": [], "proposal": None,
+                       "decision": None, "redirects": 0, "last_result": None,
+                       "last_chart": None, "outcome": None}
+    try:
+        async for update in astream_updates(GRAPH, init, _config(thread_id), timeout=120):
+            for ev in _events_from_update(update, thread_id):
+                yield ev
+    except Exception as e:
+        yield {"type": "error", "text": str(e)}
 
 
 async def step_task(thread_id: str, decision: str):
-    sess = _sessions.get(thread_id)
-    if not sess:
+    cfg = _config(thread_id)
+    if not await has_pending_interrupt(GRAPH, cfg):
         yield {"type": "error", "text": "Session expired. Start a new task."}
         return
-
-    # Redirect: re-propose honouring the user's instruction
-    if decision.startswith("redirect:"):
-        sess["redirects"] = sess.get("redirects", 0) + 1
-        if sess["redirects"] > MAX_REDIRECTS:
-            yield {"type": "final", "text": _report(sess)}
-            _sessions.pop(thread_id, None)
-            return
-        prop = _propose(sess, redirect=decision[len("redirect:"):].strip())
-        sess["pending"] = prop
-        yield {"type": "propose", "tool": prop["tool"], "summary": prop["summary"], "thread_id": thread_id}
-        return
-
-    # Stop: finalise now
-    if decision == "stop":
-        yield {"type": "final", "text": _report(sess)}
-        _sessions.pop(thread_id, None)
-        return
-
-    # Approve the pending step
-    prop = sess["pending"]
-    if not prop or prop["tool"] == "finish":
-        yield {"type": "final", "text": _report(sess)}
-        _sessions.pop(thread_id, None)
-        return
-
-    result, chart = _execute(prop["tool"], sess["ticker"])
-    # Regex compliance screen on each step; the disclaimer goes on the final report only
-    result = gr.enforce_compliance(result, semantic=False, disclaimer=False)
-    sess["context"].append({"tool": prop["tool"], "result": result})
-    if prop["tool"] == "verdict":
-        # Track record: log the stance at today's price so it can be scored later
-        try:
-            import verdict_log
-            verdict_log.log_verdict(sess["ticker"], verdict_log.extract_verdict(result),
-                                    market.quote(sess["ticker"]).get("price"), source="task")
-        except Exception:
-            pass
-    if chart:
-        yield {"type": "chart", **chart}
-    yield {"type": "step_result", "tool": prop["tool"], "text": result}
-
-    # Propose the next step
-    nxt = _propose(sess)
-    sess["pending"] = nxt
-    if nxt["tool"] == "finish":
-        yield {"type": "propose", "tool": "finish",
-               "summary": nxt.get("summary", "I have enough to answer. Approve to get the final report."),
-               "thread_id": thread_id}
-    else:
-        yield {"type": "propose", "tool": nxt["tool"], "summary": nxt["summary"], "thread_id": thread_id}
+    try:
+        async for update in astream_updates(GRAPH, Command(resume=decision), cfg, timeout=180):
+            for ev in _events_from_update(update, thread_id):
+                yield ev
+    except Exception as e:
+        yield {"type": "error", "text": str(e)}

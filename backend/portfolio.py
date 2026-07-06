@@ -26,13 +26,18 @@ import io
 import json
 import os
 import re
+from typing import TypedDict, Optional
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import interrupt, Command
 import groq_pool
 
 import market
 import guardrails as gr
+from graph_stream import astream_updates, interrupt_payload, has_pending_interrupt
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -284,6 +289,102 @@ def _screen_proposal(p: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Audit graph — LangGraph-native HITL. The holdings fan-out streams live
+# BEFORE the graph; risk → synthesise → interrupt gate → finalize run inside
+# one checkpointed StateGraph. Revise loops the synthesiser with feedback.
+# --------------------------------------------------------------------------- #
+class AuditState(TypedDict):
+    rows: list
+    metrics: dict
+    profile: Optional[str]
+    risk: Optional[str]
+    summary: Optional[str]
+    actions: Optional[list]
+    feedback: Optional[str]
+    decision: Optional[str]
+    outcome: Optional[str]
+
+
+def _node_risk(state: AuditState):
+    risk = _risk_officer(state["rows"], state["metrics"], state.get("profile") or "")
+    return {"risk": gr.enforce_compliance(risk, semantic=False, disclaimer=False)}
+
+
+def _node_synth(state: AuditState):
+    proposal = _screen_proposal(_synthesise(state["metrics"], state["risk"],
+                                            state.get("feedback") or "",
+                                            state.get("profile") or ""))
+    return {"summary": proposal["summary"], "actions": proposal["actions"], "feedback": None}
+
+
+def _gate(state: AuditState):
+    decision = interrupt({"summary": state["summary"], "actions": state["actions"]})
+    return {"decision": str(decision or "").strip()}
+
+
+def _route(state: AuditState) -> str:
+    return "finalize" if state.get("decision") in ("approve", "reject") else "revise_prep"
+
+
+def _revise_prep(state: AuditState):
+    return {"feedback": state.get("decision"), "decision": None}
+
+
+def _finalize(state: AuditState):
+    if state.get("decision") != "approve":
+        return {"outcome": gr.append_disclaimer(
+            "Audit REJECTED by reviewer — no actions recorded. "
+            "The findings above remain available for reference.")}
+    m = state["metrics"]
+    lines = ["# Portfolio audit — actions approved", ""]
+    if m.get("total_value"):
+        pnl = f" · P&L {m['total_pnl_pct']:+.2f}%" if m.get("total_pnl_pct") is not None else ""
+        lines.append(f"**Value:** ₹{m['total_value']:,.0f} across {m['holdings_count']} holdings{pnl}"
+                     + (f" · weighted P/E {m['weighted_pe']}" if m.get("weighted_pe") else ""))
+    lines += ["", "**Verdict:** " + (state.get("summary") or ""), "",
+              "**Risk findings**", state.get("risk") or "", "", "**Agreed actions**"]
+    lines += [f"{i+1}. {a['action']} — {a.get('reason', '')}"
+              for i, a in enumerate(state.get("actions") or [])]
+    # Full pipeline: semantic screen + PII + mandatory disclaimer
+    return {"outcome": gr.enforce_compliance("\n".join(lines))}
+
+
+def _build():
+    g = StateGraph(AuditState)
+    for name, fn in [("risk_officer", _node_risk), ("synthesise", _node_synth), ("gate", _gate),
+                     ("revise_prep", _revise_prep), ("finalize", _finalize)]:
+        g.add_node(name, fn)
+    g.add_edge(START, "risk_officer")
+    g.add_edge("risk_officer", "synthesise")
+    g.add_edge("synthesise", "gate")
+    g.add_conditional_edges("gate", _route, {"finalize": "finalize", "revise_prep": "revise_prep"})
+    g.add_edge("revise_prep", "synthesise")
+    g.add_edge("finalize", END)
+    return g.compile(checkpointer=MemorySaver())
+
+
+GRAPH = _build()
+
+
+def _config(thread_id: str) -> dict:
+    return {"configurable": {"thread_id": f"pf-{thread_id}"}}
+
+
+def _events_from_update(update: dict, thread_id: str):
+    payload = interrupt_payload(update)
+    if payload is not None:
+        yield {"type": "approval_request", "summary": payload.get("summary", ""),
+               "actions": payload.get("actions", []), "thread_id": thread_id}
+        return
+    for node, delta in update.items():
+        delta = delta or {}
+        if node == "risk_officer":
+            yield {"type": "agent", "name": "Risk", "text": delta.get("risk", "")}
+        elif node == "finalize":
+            yield {"type": "final", "text": delta.get("outcome", "")}
+
+
+# --------------------------------------------------------------------------- #
 # Public streaming API
 # --------------------------------------------------------------------------- #
 async def analyze(thread_id: str, profile: str = ""):
@@ -323,55 +424,32 @@ async def analyze(thread_id: str, profile: str = ""):
     if metrics.get("error"):
         yield {"type": "error", "text": metrics["error"]}
         return
-    sess["rows"], sess["metrics"] = rows, metrics
+    sess["rows"], sess["metrics"] = rows, metrics       # kept for the stress-test tool
     yield {"type": "portfolio", "metrics": metrics}
 
-    risk = await asyncio.to_thread(_risk_officer, rows, metrics, profile)
-    risk = gr.enforce_compliance(risk, semantic=False, disclaimer=False)
-    yield {"type": "agent", "name": "Risk", "text": risk}
-
-    proposal = await asyncio.to_thread(_synthesise, metrics, risk, "", profile)
-    proposal = _screen_proposal(proposal)
-    sess["pending"] = {"risk": risk, **proposal}
-    yield {"type": "approval_request", "summary": proposal["summary"],
-           "actions": proposal["actions"], "thread_id": thread_id}
-
-
-def _final_report(sess: dict, decision_note: str) -> str:
-    m, p = sess["metrics"], sess["pending"]
-    lines = [f"# Portfolio audit — {decision_note}", ""]
-    if m.get("total_value"):
-        pnl = f" · P&L {m['total_pnl_pct']:+.2f}%" if m.get("total_pnl_pct") is not None else ""
-        lines.append(f"**Value:** ₹{m['total_value']:,.0f} across {m['holdings_count']} holdings{pnl}"
-                     + (f" · weighted P/E {m['weighted_pe']}" if m.get("weighted_pe") else ""))
-    lines += ["", "**Verdict:** " + p["summary"], "", "**Risk findings**", p["risk"], "",
-              "**Agreed actions**"]
-    lines += [f"{i+1}. {a['action']} — {a.get('reason', '')}" for i, a in enumerate(p["actions"])]
-    # Full pipeline: semantic screen + PII + mandatory disclaimer
-    return gr.enforce_compliance("\n".join(lines))
+    init: AuditState = {"rows": rows, "metrics": metrics, "profile": profile,
+                        "risk": None, "summary": None, "actions": None,
+                        "feedback": None, "decision": None, "outcome": None}
+    try:
+        async for update in astream_updates(GRAPH, init, _config(thread_id), timeout=_TIMEOUT):
+            for ev in _events_from_update(update, thread_id):
+                yield ev
+    except asyncio.TimeoutError:
+        yield {"type": "error", "text": "Audit timed out. Try again."}
+    except Exception as e:
+        yield {"type": "error", "text": str(e)}
 
 
 async def resume(thread_id: str, decision: str):
-    sess = _sessions.get(thread_id)
-    if not sess or not sess.get("pending"):
+    cfg = _config(thread_id)
+    if not await has_pending_interrupt(GRAPH, cfg):
         yield {"type": "error", "text": "Session expired. Run the audit again."}
         return
-
-    if decision == "approve":
-        yield {"type": "final", "text": _final_report(sess, "actions approved")}
-        sess["pending"] = None
-
-    elif decision == "reject":
-        yield {"type": "final",
-               "text": gr.append_disclaimer("Audit REJECTED by reviewer — no actions recorded. "
-                                            "The findings above remain available for reference.")}
-        sess["pending"] = None
-
-    else:   # revise with feedback -> new proposal -> pause again
-        proposal = await asyncio.to_thread(
-            _synthesise, sess["metrics"], sess["pending"]["risk"], decision,
-            sess.get("profile", ""))
-        proposal = _screen_proposal(proposal)
-        sess["pending"] = {"risk": sess["pending"]["risk"], **proposal}
-        yield {"type": "approval_request", "summary": proposal["summary"],
-               "actions": proposal["actions"], "thread_id": thread_id}
+    try:
+        async for update in astream_updates(GRAPH, Command(resume=decision), cfg, timeout=150):
+            for ev in _events_from_update(update, thread_id):
+                yield ev
+    except asyncio.TimeoutError:
+        yield {"type": "error", "text": "Resume timed out. Try again."}
+    except Exception as e:
+        yield {"type": "error", "text": str(e)}

@@ -23,21 +23,24 @@ import asyncio
 import json
 import os
 import re
+from typing import TypedDict, Optional
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import interrupt, Command
 import groq_pool
 
 import market
 import quant
 import guardrails as gr
+from graph_stream import astream_updates, interrupt_payload, has_pending_interrupt
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 MODEL = "openai/gpt-oss-120b"
 _llm = groq_pool.create_llm(MODEL, temperature=0.3)
-
-_sessions: dict = {}          # thread_id -> {"question", "findings", "debate", "pending"}
 
 MAX_TICKERS = 2               # hard cap on fan-out
 SPECIALISTS = ("quant", "fundamental", "news", "risk")
@@ -209,6 +212,117 @@ def _judge(question: str, findings: str, bull_case: str, bear_case: str,
 
 
 # --------------------------------------------------------------------------- #
+# Debate graph — LangGraph-native HITL. The specialist fan-out streams live
+# BEFORE the graph (parallel UX); bull → bear → judge → interrupt gate →
+# finalize all run inside one checkpointed StateGraph. Revise loops the judge.
+# --------------------------------------------------------------------------- #
+class WarState(TypedDict):
+    question: str
+    tickers: list
+    findings: str
+    bull: Optional[str]
+    bear: Optional[str]
+    verdict: Optional[dict]
+    feedback: Optional[str]
+    decision: Optional[str]
+    outcome: Optional[str]
+
+
+def _node_bull(state: WarState):
+    bull = gr.enforce_compliance(_bull(state["question"], state["findings"]),
+                                 semantic=False, disclaimer=False)
+    return {"bull": bull}
+
+
+def _node_bear(state: WarState):
+    bear = gr.enforce_compliance(_bear(state["question"], state["findings"], state["bull"]),
+                                 semantic=False, disclaimer=False)
+    return {"bear": bear}
+
+
+def _node_judge(state: WarState):
+    v = _judge(state["question"], state["findings"], state["bull"], state["bear"],
+               state.get("feedback") or "")
+    return {"verdict": v, "feedback": None}
+
+
+def _gate(state: WarState):
+    v = state["verdict"]
+    decision = interrupt({
+        "recommendation": f"{v['verdict']} ({v['confidence_pct']}% confidence) — {v['reasoning']}",
+        "action": v["action"], "verdict": v,
+    })
+    return {"decision": str(decision or "").strip()}
+
+
+def _route(state: WarState) -> str:
+    return "finalize" if state.get("decision") in ("approve", "reject") else "rejudge_prep"
+
+
+def _rejudge_prep(state: WarState):
+    return {"feedback": state.get("decision"), "decision": None}
+
+
+def _finalize(state: WarState):
+    v = state["verdict"]
+    if state.get("decision") == "approve":
+        try:
+            import verdict_log
+            for t in state["tickers"]:
+                verdict_log.log_verdict(t, v["verdict"],
+                                        market.quote(t).get("price"), source="war_room")
+        except Exception:
+            pass
+        report = (f"# War-room verdict — approved\n\n"
+                  f"**{v['verdict']}** · confidence {v['confidence_pct']}% · "
+                  f"bull {v.get('bull_score')}/10 vs bear {v.get('bear_score')}/10\n\n"
+                  f"{v['reasoning']}\n\n**Next step:** {v['action']}\n\n"
+                  f"**Bull case**\n{state['bull']}\n\n**Bear case**\n{state['bear']}")
+        return {"outcome": gr.enforce_compliance(report)}
+    return {"outcome": gr.append_disclaimer("Verdict REJECTED by reviewer. No call recorded.")}
+
+
+def _build():
+    g = StateGraph(WarState)
+    for name, fn in [("bull_advocate", _node_bull), ("bear_advocate", _node_bear),
+                     ("judge", _node_judge), ("gate", _gate),
+                     ("rejudge_prep", _rejudge_prep), ("finalize", _finalize)]:
+        g.add_node(name, fn)
+    g.add_edge(START, "bull_advocate")
+    g.add_edge("bull_advocate", "bear_advocate")
+    g.add_edge("bear_advocate", "judge")
+    g.add_edge("judge", "gate")
+    g.add_conditional_edges("gate", _route, {"finalize": "finalize", "rejudge_prep": "rejudge_prep"})
+    g.add_edge("rejudge_prep", "judge")
+    g.add_edge("finalize", END)
+    return g.compile(checkpointer=MemorySaver())
+
+
+GRAPH = _build()
+
+
+def _config(thread_id: str) -> dict:
+    return {"configurable": {"thread_id": thread_id}}
+
+
+def _events_from_update(update: dict, thread_id: str):
+    payload = interrupt_payload(update)
+    if payload is not None:
+        yield {"type": "verdict", **payload.get("verdict", {})}
+        yield {"type": "approval_request", "recommendation": payload.get("recommendation", ""),
+               "action": payload.get("action", ""), "thread_id": thread_id}
+        return
+    for node, delta in update.items():
+        delta = delta or {}
+        if node == "bull_advocate":
+            yield {"type": "debate", "side": "Bull", "text": delta.get("bull", "")}
+        elif node == "bear_advocate":
+            yield {"type": "debate", "side": "Bear", "text": delta.get("bear", "")}
+        elif node == "finalize":
+            yield {"type": "final", "text": delta.get("outcome", "")}
+
+
+# --------------------------------------------------------------------------- #
 # Public streaming API
 # --------------------------------------------------------------------------- #
 async def start(question: str, default_ticker: str, thread_id: str):
@@ -237,60 +351,30 @@ async def start(question: str, default_ticker: str, thread_id: str):
             yield {"type": "error", "text": "War room timed out. Try a narrower question."}
             return
 
-    fb = _findings_block(findings)
-
     yield {"type": "phase", "text": "Specialists done — opening the debate."}
-    bull = await asyncio.to_thread(_bull, question, fb)
-    bull = gr.enforce_compliance(bull, semantic=False, disclaimer=False)
-    yield {"type": "debate", "side": "Bull", "text": bull}
-
-    bear = await asyncio.to_thread(_bear, question, fb, bull)
-    bear = gr.enforce_compliance(bear, semantic=False, disclaimer=False)
-    yield {"type": "debate", "side": "Bear", "text": bear}
-
-    verdict = await asyncio.to_thread(_judge, question, fb, bull, bear)
-    _sessions[thread_id] = {"question": question, "tickers": plan["tickers"],
-                            "findings": fb, "bull": bull, "bear": bear,
-                            "pending": verdict}
-    yield {"type": "verdict", **verdict}
-    yield {"type": "approval_request",
-           "recommendation": f"{verdict['verdict']} ({verdict['confidence_pct']}% confidence) — {verdict['reasoning']}",
-           "action": verdict["action"], "thread_id": thread_id}
+    init: WarState = {"question": question, "tickers": plan["tickers"],
+                      "findings": _findings_block(findings), "bull": None, "bear": None,
+                      "verdict": None, "feedback": None, "decision": None, "outcome": None}
+    try:
+        async for update in astream_updates(GRAPH, init, _config(thread_id), timeout=_TIMEOUT):
+            for ev in _events_from_update(update, thread_id):
+                yield ev
+    except asyncio.TimeoutError:
+        yield {"type": "error", "text": "War room timed out. Try a narrower question."}
+    except Exception as e:
+        yield {"type": "error", "text": str(e)}
 
 
 async def resume(thread_id: str, decision: str):
-    sess = _sessions.get(thread_id)
-    if not sess or not sess.get("pending"):
+    cfg = _config(thread_id)
+    if not await has_pending_interrupt(GRAPH, cfg):
         yield {"type": "error", "text": "Session expired. Run the war room again."}
         return
-    v = sess["pending"]
-
-    if decision == "approve":
-        try:
-            import verdict_log
-            for t in sess["tickers"]:
-                verdict_log.log_verdict(t, v["verdict"],
-                                        market.quote(t).get("price"), source="war_room")
-        except Exception:
-            pass
-        report = (f"# War-room verdict — approved\n\n"
-                  f"**{v['verdict']}** · confidence {v['confidence_pct']}% · "
-                  f"bull {v.get('bull_score')}/10 vs bear {v.get('bear_score')}/10\n\n"
-                  f"{v['reasoning']}\n\n**Next step:** {v['action']}\n\n"
-                  f"**Bull case**\n{sess['bull']}\n\n**Bear case**\n{sess['bear']}")
-        yield {"type": "final", "text": gr.enforce_compliance(report)}
-        sess["pending"] = None
-
-    elif decision == "reject":
-        yield {"type": "final",
-               "text": gr.append_disclaimer("Verdict REJECTED by reviewer. No call recorded.")}
-        sess["pending"] = None
-
-    else:   # revise: the judge re-rules with the reviewer's feedback
-        verdict = await asyncio.to_thread(_judge, sess["question"], sess["findings"],
-                                          sess["bull"], sess["bear"], decision)
-        sess["pending"] = verdict
-        yield {"type": "verdict", **verdict}
-        yield {"type": "approval_request",
-               "recommendation": f"{verdict['verdict']} ({verdict['confidence_pct']}% confidence) — {verdict['reasoning']}",
-               "action": verdict["action"], "thread_id": thread_id}
+    try:
+        async for update in astream_updates(GRAPH, Command(resume=decision), cfg, timeout=_TIMEOUT):
+            for ev in _events_from_update(update, thread_id):
+                yield ev
+    except asyncio.TimeoutError:
+        yield {"type": "error", "text": "Resume timed out. Try again."}
+    except Exception as e:
+        yield {"type": "error", "text": str(e)}
